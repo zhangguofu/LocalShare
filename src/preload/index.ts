@@ -1,5 +1,62 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { AppConfig } from '../main/config'
+import type { DeviceInfo, DeviceUpdate } from '../main/network/deviceTable'
+import type { OfferSummary, ReceiveProgress } from '../main/network/receiver'
+import type { TransferProgress } from '../main/network/sender'
 
-contextBridge.exposeInMainWorld('api', {
-  ping: (): string => 'pong'
-})
+export type TransferTarget = { deviceId: string } | { host: string; port: number }
+
+export interface TransferUpdate {
+  kind: 'progress' | 'complete' | 'failed' | 'error' | 'receive-progress'
+  transferId: string
+  fileName?: string
+  totalBytes?: number
+  reason?: string
+}
+
+export interface Api {
+  ping: () => Promise<string>
+  getConfig: () => Promise<AppConfig>
+  updateConfig: (patch: Partial<AppConfig>) => Promise<AppConfig>
+  getDevices: () => Promise<DeviceInfo[]>
+  onDeviceChange: (cb: (upd: DeviceUpdate) => void) => () => void
+  pickPaths: () => Promise<string[]>
+  pickDirectory: () => Promise<string | null>
+  sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string }>
+  cancelTransfer: (transferId: string) => void
+  onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
+  onOffer: (cb: (offer: OfferSummary) => void) => () => void
+  respondTransfer: (transferId: string, decision: 'accept' | 'reject', targetDir?: string) => void
+  getPathForFile: (file: File) => string
+}
+
+const api: Api = {
+  ping: () => ipcRenderer.invoke('ping'),
+  getConfig: () => ipcRenderer.invoke('config:get'),
+  updateConfig: (patch) => ipcRenderer.invoke('config:update', patch),
+  getDevices: () => ipcRenderer.invoke('devices:list'),
+  onDeviceChange: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, upd: DeviceUpdate) => cb(upd)
+    ipcRenderer.on('devices:changed', listener)
+    return () => ipcRenderer.removeListener('devices:changed', listener)
+  },
+  pickPaths: () => ipcRenderer.invoke('dialog:pick-paths'),
+  pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
+  sendTransfer: (target, paths) => ipcRenderer.invoke('transfer:send', target, paths),
+  cancelTransfer: (transferId) => ipcRenderer.send('transfer:cancel', transferId),
+  onTransferUpdate: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, u: TransferUpdate) => cb(u)
+    ipcRenderer.on('transfer:update', listener)
+    return () => ipcRenderer.removeListener('transfer:update', listener)
+  },
+  onOffer: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, offer: OfferSummary) => cb(offer)
+    ipcRenderer.on('transfer:offer', listener)
+    return () => ipcRenderer.removeListener('transfer:offer', listener)
+  },
+  respondTransfer: (transferId, decision, targetDir) =>
+    ipcRenderer.send('transfer:respond', transferId, decision, targetDir),
+  getPathForFile: (file) => webUtils.getPathForFile(file)
+}
+
+contextBridge.exposeInMainWorld('api', api)
