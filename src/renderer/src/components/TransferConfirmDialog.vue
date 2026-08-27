@@ -27,7 +27,7 @@
     </template>
     <template #footer>
       <el-button @click="reject">拒绝</el-button>
-      <el-button v-if="offer?.conflicts" @click="chooseOtherDir">选择其他位置</el-button>
+      <el-button @click="chooseOtherDir">选择其他位置</el-button>
       <el-button v-if="offer?.conflicts" type="warning" @click="accept">接受并覆盖</el-button>
       <el-button v-else type="primary" @click="accept">接受</el-button>
     </template>

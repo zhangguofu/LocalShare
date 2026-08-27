@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, Notification } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import dgram from 'node:dgram'
@@ -106,7 +106,20 @@ function startServices(): void {
   receiver.on('error', (err) => fatalPort('TCP 传输', cfg.tcpPort, err))
   receiver.on('offer', (offer: OfferSummary) => win?.webContents.send('transfer:offer', offer))
   receiver.on('progress', (p) => win?.webContents.send('transfer:update', { kind: 'receive-progress', ...p }))
-  receiver.on('complete', (id) => win?.webContents.send('transfer:update', { kind: 'complete', transferId: id }))
+  receiver.on('complete', (id: string, saveDir: string) => {
+    win?.webContents.send('transfer:update', { kind: 'complete', transferId: id, saveDir })
+    // 系统通知：点击直达目标目录（应用在后台也能快速跳转）
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: 'LocalShare 接收完成',
+        body: `已保存到：${saveDir}`
+      })
+      n.on('click', () => {
+        void shell.openPath(saveDir)
+      })
+      n.show()
+    }
+  })
   receiver.on('transferError', (e: { transferId: string; error: Error }) =>
     win?.webContents.send('transfer:update', { kind: 'error', transferId: e.transferId, reason: e.error.message })
   )
