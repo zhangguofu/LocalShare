@@ -5,7 +5,16 @@
     <el-card v-for="item in transferStore.items" :key="item.transferId" class="transfer-item" shadow="never">
       <div class="row">
         <span class="name">{{ item.name }}</span>
-        <el-tag :type="tagType(item.state)" size="small">{{ stateText(item.state) }}</el-tag>
+        <span class="row-right">
+          <el-button
+            v-if="item.state === 'transferring' && item.kind === 'outgoing'"
+            size="small"
+            text
+            type="danger"
+            @click="cancel(item.transferId)"
+          >取消</el-button>
+          <el-tag :type="tagType(item.state)" size="small">{{ stateText(item.state) }}</el-tag>
+        </span>
       </div>
       <el-progress
         v-if="item.state === 'transferring'"
@@ -41,10 +50,15 @@ function formatBytes(n: number): string {
   if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
   return n + ' B'
 }
+
+function cancel(transferId: string): void {
+  window.api.cancelTransfer(transferId)
+}
 </script>
 
 <style scoped>
 .transfer-list { display: flex; flex-direction: column; gap: 8px; }
 .transfer-item .row { display: flex; justify-content: space-between; align-items: center; }
+.row-right { display: flex; align-items: center; gap: 8px; }
 .reason { color: var(--el-color-danger); font-size: 12px; margin-top: 4px; }
 </style>

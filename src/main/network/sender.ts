@@ -136,8 +136,12 @@ export class Sender extends EventEmitter {
 
   cancel(reason = 'user_cancelled'): void {
     if (!this.socket || !this.transferId) return
-    this.socket.write(encodeFrame({ type: 'CANCEL', transferId: this.transferId, reason }))
-    this.fail(new Error('cancelled'))
+    const id = this.transferId
+    this.transferId = null // 阻止 close 事件重复 fail
+    this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
+    this.emit('failed', { transferId: id, reason: 'cancelled' })
+    this.socket.end() // flush 缓冲后再 FIN，确保 CANCEL 帧送达
+    this.socket = null
   }
 
   private onMessage(msg: Message): void {

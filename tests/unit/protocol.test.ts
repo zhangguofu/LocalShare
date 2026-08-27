@@ -93,6 +93,15 @@ describe('sanitizePath', () => {
     expect(sanitizePath('CON')).toBeNull()
     expect(sanitizePath('dir/nul')).toBeNull()
   })
+  it('拒绝带扩展名的 Windows 保留名', () => {
+    expect(sanitizePath('CON.txt')).toBeNull()
+    expect(sanitizePath('dir/NUL.log')).toBeNull()
+    expect(sanitizePath('com1.x')).toBeNull()
+  })
+  it('允许含双点的合法文件名', () => {
+    expect(sanitizePath('a..b')).toBe('a..b')
+    expect(sanitizePath('v1..2.txt')).toBe('v1..2.txt')
+  })
   it('拒绝空路径与纯点段', () => {
     expect(sanitizePath('')).toBeNull()
     expect(sanitizePath('./x')).toBeNull()

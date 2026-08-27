@@ -86,7 +86,11 @@ export class Receiver extends EventEmitter {
     const session = this.sessions.get(transferId)
     if (!session) return
     if (decision === 'reject') session.reject('user_declined')
-    else void session.accept(targetDir)
+    else
+      void session.accept(targetDir).catch((err: Error) => {
+        // mkdir 失败（只读卷/目标为文件）：上报，避免 unhandledRejection 崩溃主进程
+        this.emit('transferError', { transferId, error: err })
+      })
   }
 }
 
@@ -160,27 +164,41 @@ class Session extends EventEmitter {
   private beginFile(msg: FileHeaderMessage): void {
     const safe = sanitizePath(msg.path)
     if (!safe) throw new Error('protocol error: unsafe path ' + msg.path)
+    if (!Number.isFinite(msg.size) || msg.size < 0) throw new Error('protocol error: invalid size ' + msg.size)
     const target = path.join(this.targetDir ?? this.defaultDir, safe)
     const sink = new AtomicSink(target)
     sink.open()
+    // 写盘错误（磁盘满/权限）：发 ERROR 帧并断开（设计 7）
+    sink.stream?.on('error', (err: Error) => {
+      this.sendError('write_failed', err.message)
+      this.fail(err)
+    })
     this.current = { header: { ...msg, path: safe }, sink, written: 0 }
     if (msg.size > 0) this.state = 'DATA'
   }
 
-  // 同步消费文件数据；写满 size 后回 CTRL，剩余字节递归回到帧解析
+  // 同步消费文件数据；写满 size 后回 CTRL，剩余字节递归回到帧解析。带背压：
+  // sink 缓冲写满（write 返回 false）时暂停 socket，待 drain 后恢复（设计 5.4 内存恒定）
   private consumeData(chunk: Buffer): void {
     const cur = this.current!
     const need = cur.header.size - cur.written
     if (chunk.length <= need) {
-      cur.sink.write(chunk)
+      if (!cur.sink.write(chunk)) this.pauseForDrain(cur)
       cur.written += chunk.length
       if (cur.written === cur.header.size) this.state = 'CTRL'
       return
     }
-    cur.sink.write(chunk.subarray(0, need))
+    if (!cur.sink.write(chunk.subarray(0, need))) this.pauseForDrain(cur)
     cur.written = cur.header.size
     this.state = 'CTRL'
     this.onData(chunk.subarray(need))
+  }
+
+  private pauseForDrain(cur: { sink: AtomicSink }): void {
+    this.socket.pause()
+    cur.sink.stream?.once('drain', () => {
+      if (!this.closed) this.socket.resume()
+    })
   }
 
   private async onMessage(msg: Message): Promise<void> {
@@ -261,11 +279,28 @@ class Session extends EventEmitter {
     this.current = null
     this.msgChain = this.msgChain
       .then(() => cur.sink.commit())
-      .catch((err: Error) => this.fail(err))
+      .catch((err: Error) => {
+        // 落盘失败（磁盘满/权限/rename 失败）：发 ERROR 帧，发送方显示具体原因（设计 7）
+        this.sendError('write_failed', err.message)
+        this.fail(err)
+      })
     this.ev.onProgress({ transferId: this.transferId, fileName: msg.path, totalBytes: cur.header.size })
   }
 
+  // 发送 ERROR 帧（本地资源错误时；协议违规/对端主动行为不发送）
+  private sendError(code: string, message: string): void {
+    if (this.closed || this.transferId === 'pending') return
+    try {
+      this.socket.write(encodeFrame({ type: 'ERROR', transferId: this.transferId, code, message }))
+    } catch {
+      // 对端可能已断开，忽略
+    }
+  }
+
   private async onTransferDone(_msg: Message): Promise<void> {
+    if (this.current) {
+      throw new Error('protocol error: TRANSFER_DONE during file transfer')
+    }
     this.socket.write(encodeFrame({ type: 'TRANSFER_ACK', transferId: this.transferId }))
     this.ev.onComplete(this.transferId)
     this.socket.end()

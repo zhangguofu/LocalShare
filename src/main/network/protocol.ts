@@ -138,18 +138,18 @@ export class FrameParser {
 
 // ---- 路径清洗（协议 5.6） ----
 const INVALID_CHARS = /[\\/:*?"<>|\u0000-\u001f]/
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+// Windows 保留名（含带扩展名形式，如 CON.txt、dir/NUL.log）
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
 
 export function sanitizePath(p: string): string | null {
   if (!p || p.length === 0) return null
-  if (p.includes('..')) return null
   if (p.startsWith('/') || p.startsWith('\\')) return null
   if (/^[a-zA-Z]:/.test(p)) return null
   if (p.startsWith('~')) return null
   const parts = p.split('/').filter((s) => s.length > 0)
   if (parts.length === 0) return null
   for (const part of parts) {
-    if (part === '.') return null
+    if (part === '.' || part === '..') return null // 按段检查，避免误拒 a..b 等合法名
     if (INVALID_CHARS.test(part)) return null
     if (WINDOWS_RESERVED.test(part)) return null
   }

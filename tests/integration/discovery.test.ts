@@ -45,4 +45,28 @@ describe('DiscoveryService 集成（真实 UDP，回环）', () => {
       service.stop()
     }
   })
+
+  it('端口被占时触发 error 事件（规格 4.2：严格端口，报错退出）', async () => {
+    const a = new DiscoveryService({
+      port: PORT, deviceId: 'a', deviceName: 'A',
+      platform: process.platform, version: '0.1.0', tcpPort: 45600,
+      broadcastAddress: '127.0.0.1', helloIntervalMs: 60000
+    })
+    const b = new DiscoveryService({
+      port: PORT, deviceId: 'b', deviceName: 'B',
+      platform: process.platform, version: '0.1.0', tcpPort: 45601,
+      broadcastAddress: '127.0.0.1', helloIntervalMs: 60000
+    })
+    a.start()
+    try {
+      await new Promise<void>((resolve) => a.once('listening', () => resolve()))
+      const errP = new Promise<Error>((resolve) => b.once('error', (e: Error) => resolve(e)))
+      b.start()
+      const err = await errP
+      expect(err.message).toMatch(/EADDRINUSE/)
+    } finally {
+      a.stop()
+      b.stop()
+    }
+  })
 })
