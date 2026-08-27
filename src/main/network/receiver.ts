@@ -92,6 +92,14 @@ export class Receiver extends EventEmitter {
         this.emit('transferError', { transferId, error: err })
       })
   }
+
+  // 二次冲突检测：用户指定了新目标目录后，检查该目录下是否有与传输清单重名的文件/目录
+  // （设计 6.3：新位置仍有冲突则再次呈现选择，避免意外覆盖）
+  async checkTargetDirConflicts(transferId: string, dir: string): Promise<boolean> {
+    const session = this.sessions.get(transferId)
+    if (!session) return false
+    return session.checkConflicts(dir)
+  }
 }
 
 class Session extends EventEmitter {
@@ -101,6 +109,7 @@ class Session extends EventEmitter {
   private current: { header: FileHeaderMessage; sink: AtomicSink; written: number } | null = null
   private targetDir: string | null = null
   private dirEntries: string[] = [] // OFFER 中的 type:'dir' 条目（sanitize 后的路径）
+  private offerFiles: { type: 'file' | 'dir'; path: string }[] = [] // 完整清单（二次冲突检测用）
   private closed = false
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
@@ -245,6 +254,7 @@ class Session extends EventEmitter {
     }
     this.transferId = msg.transferId
     this.dirEntries = files.filter((f) => f.type === 'dir').map((f) => f.path)
+    this.offerFiles = files.map((f) => ({ type: f.type, path: f.path }))
     this.ev.onOffer({
       transferId: msg.transferId,
       senderId: msg.senderId,
@@ -263,6 +273,11 @@ class Session extends EventEmitter {
       await fs.mkdir(path.join(this.targetDir, rel), { recursive: true })
     }
     if (!this.closed) this.socket.write(encodeFrame({ type: 'ACCEPT', transferId: this.transferId }))
+  }
+
+  // 检查指定目录下是否存在与传输清单重名的文件/目录
+  async checkConflicts(dir: string): Promise<boolean> {
+    return detectConflicts(this.offerFiles, dir)
   }
 
   reject(reason: string): void {

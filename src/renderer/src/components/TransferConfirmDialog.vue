@@ -36,7 +36,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTransferStore } from '../stores/transfer'
 
 const transferStore = useTransferStore()
@@ -54,15 +54,21 @@ function formatBytes(n: number): string {
   return n + ' B'
 }
 
-function accept(): void {
+async function accept(): Promise<void> {
   if (!offer.value) return
-  window.api.respondTransfer(offer.value.transferId, 'accept')
-  transferStore.clearOffer()
+  // 冲突时按钮为「接受并覆盖」→ force；无冲突直接接受
+  const force = offer.value.conflicts
+  const result = await window.api.respondTransfer(offer.value.transferId, 'accept', undefined, force)
+  if (result.ok) {
+    transferStore.clearOffer()
+  } else if (result.error) {
+    ElMessage.error(result.error)
+  }
 }
 
 function reject(): void {
   if (!offer.value) return
-  window.api.respondTransfer(offer.value.transferId, 'reject')
+  void window.api.respondTransfer(offer.value.transferId, 'reject')
   transferStore.clearOffer()
 }
 
@@ -70,9 +76,33 @@ async function chooseOtherDir(): Promise<void> {
   if (!offer.value) return
   const dir = await window.api.pickDirectory()
   if (!dir) return
-  window.api.respondTransfer(offer.value.transferId, 'accept', dir)
-  transferStore.clearOffer()
-  ElMessage.success('已选择新位置接收')
+  const result = await window.api.respondTransfer(offer.value.transferId, 'accept', dir)
+  if (result.ok) {
+    transferStore.clearOffer()
+    ElMessage.success('已选择新位置接收')
+    return
+  }
+  if (result.conflicts) {
+    // 二次冲突确认：所选目录已存在同名内容，避免意外覆盖（设计 6.3）
+    try {
+      await ElMessageBox.confirm(
+        `所选目录已存在同名文件/文件夹，继续将覆盖已有内容。是否覆盖？`,
+        '存在同名内容',
+        { confirmButtonText: '覆盖', cancelButtonText: '返回', type: 'warning' }
+      )
+      const forceResult = await window.api.respondTransfer(offer.value.transferId, 'accept', dir, true)
+      if (forceResult.ok) {
+        transferStore.clearOffer()
+        ElMessage.success('已覆盖接收')
+      } else if (forceResult.error) {
+        ElMessage.error(forceResult.error)
+      }
+    } catch {
+      // 用户选「返回」：对话框保持，可再次选择其他位置或回到覆盖流程
+    }
+    return
+  }
+  if (result.error) ElMessage.error(result.error)
 }
 
 async function openSaveDir(): Promise<void> {

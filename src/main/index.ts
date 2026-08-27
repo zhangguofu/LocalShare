@@ -217,8 +217,19 @@ function registerIpc(): void {
     senders.get(transferId)?.cancel()
   })
 
-  ipcMain.on('transfer:respond', (_e, transferId: string, decision: 'accept' | 'reject', targetDir?: string) => {
-    receiver?.respond(transferId, decision, targetDir)
+  ipcMain.handle('transfer:respond', async (_e, transferId: string, decision: 'accept' | 'reject', targetDir?: string, force = false) => {
+    if (!receiver) return { ok: false, error: '接收服务未运行' }
+    if (decision === 'reject') {
+      receiver.respond(transferId, 'reject')
+      return { ok: true }
+    }
+    // 用户指定了新目录：先做二次冲突检测，冲突且未确认覆盖则返回提示，由 UI 再次询问（设计 6.3）
+    if (targetDir) {
+      const conflicts = await receiver.checkTargetDirConflicts(transferId, targetDir)
+      if (conflicts && !force) return { conflicts: true, ok: false }
+    }
+    receiver.respond(transferId, 'accept', targetDir)
+    return { ok: true }
   })
 }
 

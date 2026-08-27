@@ -140,6 +140,29 @@ describe('端到端传输（回环 TCP）', () => {
     expect(await fs.readFile(path.join(altDir, 'a.txt'), 'utf8')).toBe('elsewhere')
   })
 
+  it('指定目标目录存在同名文件时 checkTargetDirConflicts 返回 true，无冲突目录返回 false', async () => {
+    const srcFile = path.join(root, 'a.txt')
+    await fs.writeFile(srcFile, 'data')
+    const r = await startReceiver()
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-c', [{ relPath: 'a.txt', absPath: srcFile, type: 'file', size: 4 }], 4)
+    const offer = await offerP
+
+    const conflictDir = path.join(root, 'alt')
+    await fs.mkdir(conflictDir)
+    await fs.writeFile(path.join(conflictDir, 'a.txt'), 'old')
+    expect(await r.checkTargetDirConflicts(offer.transferId, conflictDir)).toBe(true)
+
+    const cleanDir = path.join(root, 'clean')
+    await fs.mkdir(cleanDir)
+    expect(await r.checkTargetDirConflicts(offer.transferId, cleanDir)).toBe(false)
+
+    // 收尾：拒绝，避免悬挂等待
+    r.respond(offer.transferId, 'reject')
+    await expect(sendP).rejects.toThrow(/declined/)
+  })
+
   it('传输中断：接收方清理 .part 不残留', async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7)) // 32MB，确保传输中

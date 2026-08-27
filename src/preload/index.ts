@@ -28,7 +28,12 @@ export interface Api {
   cancelTransfer: (transferId: string) => void
   onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
   onOffer: (cb: (offer: OfferSummary) => void) => () => void
-  respondTransfer: (transferId: string, decision: 'accept' | 'reject', targetDir?: string) => void
+  respondTransfer: (
+    transferId: string,
+    decision: 'accept' | 'reject',
+    targetDir?: string,
+    force?: boolean
+  ) => Promise<{ ok: boolean; conflicts?: boolean; error?: string }>
   getPathForFile: (file: File) => string
 }
 
@@ -57,8 +62,8 @@ const api: Api = {
     ipcRenderer.on('transfer:offer', listener)
     return () => ipcRenderer.removeListener('transfer:offer', listener)
   },
-  respondTransfer: (transferId, decision, targetDir) =>
-    ipcRenderer.send('transfer:respond', transferId, decision, targetDir),
+  respondTransfer: (transferId, decision, targetDir, force = false) =>
+    ipcRenderer.invoke('transfer:respond', transferId, decision, targetDir, force),
   getPathForFile: (file) => webUtils.getPathForFile(file)
 }
 
