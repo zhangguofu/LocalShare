@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
+import dgram from 'node:dgram'
+import net from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { getConfig, updateConfig, type AppConfig } from './config'
 import { DiscoveryService } from './network/discovery'
@@ -50,6 +52,41 @@ function fatalPort(kind: string, port: number, err: Error): void {
   app.exit(1)
 }
 
+// 探测端口是否空闲（设置页保存前调用，避免保存后启动失败进入死循环）
+function assertUdpPortFree(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const s = dgram.createSocket('udp4')
+    s.once('error', (e) => {
+      s.close()
+      reject(new Error(`UDP 端口 ${port} 已被占用：${e.message}`))
+    })
+    s.bind(port, () => {
+      s.close()
+      resolve()
+    })
+  })
+}
+
+function assertTcpPortFree(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.once('error', (e) => reject(new Error(`TCP 端口 ${port} 已被占用：${e.message}`)))
+    srv.listen(port, () => srv.close(() => resolve()))
+  })
+}
+
+function stopServices(): void {
+  discovery?.stop()
+  discovery = null
+  receiver?.stop()
+  receiver = null
+}
+
+function restartServices(): void {
+  stopServices()
+  startServices()
+}
+
 function startServices(): void {
   const cfg = getConfig()
 
@@ -79,7 +116,22 @@ function startServices(): void {
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('config:get', () => getConfig())
-  ipcMain.handle('config:update', (_e, patch: Partial<AppConfig>) => updateConfig(patch))
+  ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
+    // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）
+    const cur = getConfig()
+    if (patch.udpPort !== undefined && patch.udpPort !== cur.udpPort) {
+      await assertUdpPortFree(patch.udpPort)
+    }
+    if (patch.tcpPort !== undefined && patch.tcpPort !== cur.tcpPort) {
+      await assertTcpPortFree(patch.tcpPort)
+    }
+    const next = await updateConfig(patch)
+    // 端口或设备名变更：动态重启服务（无需重启应用）；仅保存目录变更不重启（动态读）
+    const needsRestart =
+      patch.udpPort !== undefined || patch.tcpPort !== undefined || patch.deviceName !== undefined
+    if (needsRestart) restartServices()
+    return next
+  })
 
   ipcMain.handle('devices:list', () => discovery?.getDevices() ?? [])
 
