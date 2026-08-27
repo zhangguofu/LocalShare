@@ -36,13 +36,14 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
   })
 }
 
-function pipeFile(socket: net.Socket, absPath: string): Promise<void> {
+function pipeFile(socket: net.Socket, absPath: string, onBytes: (n: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const stream = createReadStream(absPath)
     stream.on('error', reject)
     socket.on('error', reject)
     stream.on('data', (chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      onBytes(buf.length)
       if (!socket.write(buf)) stream.pause()
     })
     socket.on('drain', () => stream.resume())
@@ -107,21 +108,35 @@ export class Sender extends EventEmitter {
       if (!result.ok) throw new Error(result.reason ?? 'rejected')
 
       let sent = 0
-      for (const entry of entries) {
-        if (entry.type === 'dir') continue // 空目录条目无需传输数据
-        socket.write(encodeFrame({ type: 'FILE_HEADER', transferId, path: entry.relPath, size: entry.size }))
-        if (entry.size > 0) await pipeFile(socket, entry.absPath)
-        sent += entry.size
+      let lastEmit = 0
+      // 节流：至少 50ms 上报一次，避免高频 IPC；force 用于文件边界/结束时强制上报
+      const emitProgress = (fileName: string, fileSize: number, force = false): void => {
+        const now = Date.now()
+        if (!force && now - lastEmit < 50) return
+        lastEmit = now
         this.emit('progress', {
           transferId,
-          fileName: entry.relPath,
-          fileBytes: entry.size,
-          fileSize: entry.size,
+          fileName,
+          fileBytes: sent % (fileSize || 1),
+          fileSize,
           totalBytes: sent,
           done: false
         } satisfies TransferProgress)
-        socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: entry.size }))
       }
+      for (const entry of entries) {
+        if (entry.type === 'dir') continue // 空目录条目无需传输数据
+        const size = entry.size
+        socket.write(encodeFrame({ type: 'FILE_HEADER', transferId, path: entry.relPath, size }))
+        if (size > 0) {
+          await pipeFile(socket, entry.absPath, (n) => {
+            sent += n
+            emitProgress(entry.relPath, size)
+          })
+        }
+        socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: size }))
+        emitProgress(entry.relPath, size, true)
+      }
+      emitProgress('', 0, true)
 
       socket.write(encodeFrame({ type: 'TRANSFER_DONE', transferId }))
       await waitFor(this, 'transfer-ack', OFFER_TIMEOUT_MS, 'ack timeout')

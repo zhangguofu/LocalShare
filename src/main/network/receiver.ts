@@ -28,7 +28,7 @@ export interface OfferSummary {
 export interface ReceiveProgress {
   transferId: string
   fileName: string
-  totalBytes: number
+  totalBytes: number // 本次传输累计已收字节
 }
 
 type SessionCallbacks = {
@@ -103,6 +103,8 @@ class Session extends EventEmitter {
   private dirEntries: string[] = [] // OFFER 中的 type:'dir' 条目（sanitize 后的路径）
   private closed = false
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
+  private receivedBytes = 0 // 本次传输累计已收字节
+  private lastProgressAt = 0
 
   constructor(
     private readonly socket: net.Socket,
@@ -185,13 +187,25 @@ class Session extends EventEmitter {
     if (chunk.length <= need) {
       if (!cur.sink.write(chunk)) this.pauseForDrain(cur)
       cur.written += chunk.length
+      this.receivedBytes += chunk.length
+      this.emitProgress(cur.header.path)
       if (cur.written === cur.header.size) this.state = 'CTRL'
       return
     }
     if (!cur.sink.write(chunk.subarray(0, need))) this.pauseForDrain(cur)
     cur.written = cur.header.size
+    this.receivedBytes += need
+    this.emitProgress(cur.header.path)
     this.state = 'CTRL'
     this.onData(chunk.subarray(need))
+  }
+
+  // 进度节流：至少 50ms 上报一次，避免高频 IPC
+  private emitProgress(fileName: string): void {
+    const now = Date.now()
+    if (now - this.lastProgressAt < 50) return
+    this.lastProgressAt = now
+    this.ev.onProgress({ transferId: this.transferId, fileName, totalBytes: this.receivedBytes })
   }
 
   private pauseForDrain(cur: { sink: AtomicSink }): void {
@@ -284,7 +298,7 @@ class Session extends EventEmitter {
         this.sendError('write_failed', err.message)
         this.fail(err)
       })
-    this.ev.onProgress({ transferId: this.transferId, fileName: msg.path, totalBytes: cur.header.size })
+    this.ev.onProgress({ transferId: this.transferId, fileName: msg.path, totalBytes: this.receivedBytes })
   }
 
   // 发送 ERROR 帧（本地资源错误时；协议违规/对端主动行为不发送）

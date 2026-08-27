@@ -38,7 +38,7 @@ export const useTransferStore = defineStore('transfer', () => {
       item.doneBytes = u.totalBytes ?? item.doneBytes
     } else if (u.kind === 'receive-progress') {
       item.state = 'transferring'
-      item.doneBytes += u.totalBytes ?? 0
+      item.doneBytes = u.totalBytes ?? item.doneBytes
     } else if (u.kind === 'complete') {
       item.state = 'complete'
       item.doneBytes = item.totalBytes
