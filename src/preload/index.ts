@@ -28,6 +28,7 @@ export interface Api {
   cancelTransfer: (transferId: string) => void
   onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
   onOffer: (cb: (offer: OfferSummary) => void) => () => void
+  checkDirConflicts: (transferId: string, dir: string) => Promise<{ conflicts: boolean; error?: string }>
   respondTransfer: (
     transferId: string,
     decision: 'accept' | 'reject',
@@ -64,6 +65,7 @@ const api: Api = {
   },
   respondTransfer: (transferId, decision, targetDir, force = false) =>
     ipcRenderer.invoke('transfer:respond', transferId, decision, targetDir, force),
+  checkDirConflicts: (transferId, dir) => ipcRenderer.invoke('transfer:check-dir-conflicts', transferId, dir),
   getPathForFile: (file) => webUtils.getPathForFile(file)
 }
 

@@ -217,6 +217,12 @@ function registerIpc(): void {
     senders.get(transferId)?.cancel()
   })
 
+  ipcMain.handle('transfer:check-dir-conflicts', async (_e, transferId: string, dir: string) => {
+    if (!receiver) return { conflicts: false, error: '接收服务未运行' }
+    const conflicts = await receiver.checkTargetDirConflicts(transferId, dir)
+    return { conflicts }
+  })
+
   ipcMain.handle('transfer:respond', async (_e, transferId: string, decision: 'accept' | 'reject', targetDir?: string, force = false) => {
     if (!receiver) return { ok: false, error: '接收服务未运行' }
     if (decision === 'reject') {

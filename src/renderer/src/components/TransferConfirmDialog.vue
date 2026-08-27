@@ -15,36 +15,49 @@
           （{{ formatBytes(offer.totalBytes) }}）
         </p>
         <p>
-          保存到：<el-link type="primary" @click="openSaveDir">{{ saveDir }}</el-link>
+          保存到：<el-link type="primary" @click="openCurrentDir">{{ currentDir }}</el-link>
         </p>
         <el-alert
-          v-if="offer.conflicts"
+          v-if="currentConflicts"
           type="warning"
           :closable="false"
-          title="保存位置已存在同名文件/文件夹"
+          title="保存位置已存在同名文件/文件夹，接受将覆盖已有内容"
         />
       </div>
     </template>
     <template #footer>
-      <el-button @click="reject">拒绝</el-button>
-      <el-button @click="chooseOtherDir">选择其他位置</el-button>
-      <el-button v-if="offer?.conflicts" type="warning" @click="accept">接受并覆盖</el-button>
+      <el-button :disabled="checking" @click="reject">拒绝</el-button>
+      <el-button :loading="checking" @click="chooseOtherDir">选择其他位置</el-button>
+      <el-button v-if="currentConflicts" type="warning" @click="accept">接受并覆盖</el-button>
       <el-button v-else type="primary" @click="accept">接受</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, ref, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useTransferStore } from '../stores/transfer'
 
 const transferStore = useTransferStore()
 const offer = computed(() => transferStore.pendingOffer)
-const saveDir = ref('')
+
+const defaultDir = ref('') // 默认保存目录（配置项）
+const currentDir = ref('') // 当前目标目录（初始=默认，可反复更换）
+const currentConflicts = ref(false) // 当前目标目录的冲突检测结果
+const checking = ref(false)
 
 onMounted(async () => {
-  saveDir.value = (await window.api.getConfig()).saveDir
+  defaultDir.value = (await window.api.getConfig()).saveDir
+})
+
+// 打开确认框：目标目录重置为默认目录，冲突状态取 OFFER 已计算的默认目录冲突
+watch(offer, (o) => {
+  if (o) {
+    currentDir.value = defaultDir.value
+    currentConflicts.value = o.conflicts
+    checking.value = false
+  }
 })
 
 function formatBytes(n: number): string {
@@ -54,16 +67,46 @@ function formatBytes(n: number): string {
   return n + ' B'
 }
 
+// 选其他位置：只查询冲突并更新内嵌提示，不提交；可反复选择直到覆盖或选到干净目录
+async function chooseOtherDir(): Promise<void> {
+  if (!offer.value) return
+  const dir = await window.api.pickDirectory()
+  if (!dir) return
+  checking.value = true
+  try {
+    const result = await window.api.checkDirConflicts(offer.value.transferId, dir)
+    currentDir.value = dir
+    currentConflicts.value = result.conflicts
+    if (result.conflicts) {
+      ElMessage.warning('所选目录存在同名文件/文件夹，可选择覆盖或继续更换目录')
+    } else {
+      ElMessage.success('该目录无同名内容，可正常接收')
+    }
+  } finally {
+    checking.value = false
+  }
+}
+
+// 接受（无冲突）/ 接受并覆盖（冲突）：提交当前目录与是否覆盖
 async function accept(): Promise<void> {
   if (!offer.value) return
-  // 冲突时按钮为「接受并覆盖」→ force；无冲突直接接受
-  const force = offer.value.conflicts
-  const result = await window.api.respondTransfer(offer.value.transferId, 'accept', undefined, force)
+  const result = await window.api.respondTransfer(
+    offer.value.transferId,
+    'accept',
+    currentDir.value,
+    currentConflicts.value
+  )
   if (result.ok) {
     transferStore.clearOffer()
-  } else if (result.error) {
-    ElMessage.error(result.error)
+    return
   }
+  if (result.conflicts) {
+    // 防御兜底：磁盘状态在检测后发生变化（如该目录刚被写入同名文件），重新提示
+    currentConflicts.value = true
+    ElMessage.warning('目标目录出现同名内容，请选择覆盖或更换目录')
+    return
+  }
+  if (result.error) ElMessage.error(result.error)
 }
 
 function reject(): void {
@@ -72,42 +115,9 @@ function reject(): void {
   transferStore.clearOffer()
 }
 
-async function chooseOtherDir(): Promise<void> {
-  if (!offer.value) return
-  const dir = await window.api.pickDirectory()
-  if (!dir) return
-  const result = await window.api.respondTransfer(offer.value.transferId, 'accept', dir)
-  if (result.ok) {
-    transferStore.clearOffer()
-    ElMessage.success('已选择新位置接收')
-    return
-  }
-  if (result.conflicts) {
-    // 二次冲突确认：所选目录已存在同名内容，避免意外覆盖（设计 6.3）
-    try {
-      await ElMessageBox.confirm(
-        `所选目录已存在同名文件/文件夹，继续将覆盖已有内容。是否覆盖？`,
-        '存在同名内容',
-        { confirmButtonText: '覆盖', cancelButtonText: '返回', type: 'warning' }
-      )
-      const forceResult = await window.api.respondTransfer(offer.value.transferId, 'accept', dir, true)
-      if (forceResult.ok) {
-        transferStore.clearOffer()
-        ElMessage.success('已覆盖接收')
-      } else if (forceResult.error) {
-        ElMessage.error(forceResult.error)
-      }
-    } catch {
-      // 用户选「返回」：对话框保持，可再次选择其他位置或回到覆盖流程
-    }
-    return
-  }
-  if (result.error) ElMessage.error(result.error)
-}
-
-async function openSaveDir(): Promise<void> {
-  if (!saveDir.value) return
-  const err = await window.api.openPath(saveDir.value)
+async function openCurrentDir(): Promise<void> {
+  if (!currentDir.value) return
+  const err = await window.api.openPath(currentDir.value)
   if (err) ElMessage.error('无法打开文件夹：' + err)
 }
 </script>
