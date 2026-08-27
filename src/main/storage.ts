@@ -1,4 +1,4 @@
-import { promises as fs, createWriteStream, type WriteStream } from 'node:fs'
+import { promises as fs, mkdirSync, createWriteStream, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import type { FileEntry } from './network/protocol'
@@ -29,6 +29,7 @@ export async function detectConflicts(entries: FileEntry[], dir: string): Promis
 }
 
 // 原子落盘：写 .part → commit 时 rename 到目标（覆盖语义由 rename 提供）
+// open 为同步操作（mkdirSync + createWriteStream），保证数据到达时流已就绪
 export class AtomicSink {
   private readonly partPath: string
   stream?: WriteStream
@@ -37,8 +38,8 @@ export class AtomicSink {
     this.partPath = targetPath + '.part'
   }
 
-  async open(): Promise<void> {
-    await fs.mkdir(path.dirname(this.targetPath), { recursive: true })
+  open(): void {
+    mkdirSync(path.dirname(this.targetPath), { recursive: true })
     this.stream = createWriteStream(this.partPath, { flags: 'w' })
   }
 
