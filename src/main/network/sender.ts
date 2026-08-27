@@ -13,7 +13,9 @@ export interface TransferProgress {
   done: boolean
 }
 
-const OFFER_TIMEOUT_MS = 60_000
+const OFFER_TIMEOUT_MS = 180_000 // OFFER 等待确认：3 分钟（用户可能离开确认框）
+const ACK_TIMEOUT_MS = 30_000 // TRANSFER_DONE 后等 ACK：30 秒
+const NO_DATA_TIMEOUT_MS = 30_000 // 传输中无数据流动（写方向无进展）：30 秒
 
 function onceConnect(socket: net.Socket): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -85,6 +87,9 @@ export class Sender extends EventEmitter {
     socket.on('close', () => {
       if (this.transferId) this.fail(new Error('connection closed'))
     })
+    // 传输阶段无数据超时：socket 读写活动 30 秒无进展 → 判定连接死（设计 5.8）
+    socket.on('timeout', () => this.fail(new Error('传输超时：30 秒无数据流动')))
+    socket.setTimeout(0) // OFFER 等待阶段禁用（由 OFFER_TIMEOUT_MS 3 分钟控制）
 
     try {
       await onceConnect(socket)
@@ -106,6 +111,9 @@ export class Sender extends EventEmitter {
         reason?: string
       }
       if (!result.ok) throw new Error(result.reason ?? 'rejected')
+
+      // 进入传输阶段：启用无数据超时（30 秒无读写活动则失败）
+      socket.setTimeout(NO_DATA_TIMEOUT_MS)
 
       let sent = 0
       let lastEmit = 0
@@ -139,7 +147,7 @@ export class Sender extends EventEmitter {
       emitProgress('', 0, true)
 
       socket.write(encodeFrame({ type: 'TRANSFER_DONE', transferId }))
-      await waitFor(this, 'transfer-ack', OFFER_TIMEOUT_MS, 'ack timeout')
+      await waitFor(this, 'transfer-ack', ACK_TIMEOUT_MS, 'ack timeout')
       this.emit('complete', { transferId })
       socket.end()
       this.transferId = null

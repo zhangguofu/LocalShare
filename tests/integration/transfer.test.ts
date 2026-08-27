@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import net from 'node:net'
 import { Sender } from '../../src/main/network/sender'
 import { Receiver, type OfferSummary } from '../../src/main/network/receiver'
+import { encodeFrame, type OfferMessage } from '../../src/main/network/protocol'
 import type { WalkEntry } from '../../src/main/network/tree'
 
 const TCP_PORT = 45600
@@ -161,6 +163,38 @@ describe('端到端传输（回环 TCP）', () => {
     // 收尾：拒绝，避免悬挂等待
     r.respond(offer.transferId, 'reject')
     await expect(sendP).rejects.toThrow(/declined/)
+  })
+
+  it('接受后无数据到达：按无数据超时失败并清理 .part', async () => {
+    // 用小超时加速测试
+    const r = new Receiver({ port: TCP_PORT, saveDir: () => recvDir, noDataTimeoutMs: 300 })
+    receiver = r
+    r.start()
+    await new Promise<void>((res) => r.once('listening', res))
+
+    // 原始 socket 发送合法 OFFER，接受后不再发送任何数据
+    const sock = net.createConnection({ host: '127.0.0.1', port: TCP_PORT })
+    await new Promise<void>((resolve, reject) => {
+      sock.once('connect', resolve)
+      sock.once('error', reject)
+    })
+    const offer: OfferMessage = {
+      type: 'OFFER', transferId: 't-idle', senderId: 'me', senderName: 'Me',
+      fileCount: 1, totalBytes: 10,
+      files: [{ type: 'file', path: 'a.txt', size: 10 }]
+    }
+    sock.write(encodeFrame(offer))
+
+    const offerSum = await new Promise<OfferSummary>((res) => r.once('offer', res))
+    r.respond(offerSum.transferId, 'accept')
+
+    const { error } = await new Promise<{ transferId: string; error: Error }>((res) =>
+      r.once('transferError', (e) => res(e))
+    )
+    expect(error.message).toMatch(/无数据/)
+    sock.destroy()
+    await new Promise((res) => setTimeout(res, 100))
+    await expect(fs.access(path.join(recvDir, 'a.txt.part'))).rejects.toThrow()
   })
 
   it('传输中断：接收方清理 .part 不残留', async () => {

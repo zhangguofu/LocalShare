@@ -31,6 +31,8 @@ export interface ReceiveProgress {
   totalBytes: number // 本次传输累计已收字节
 }
 
+const NO_DATA_TIMEOUT_MS = 30_000 // 接受后 30 秒无数据到达 → 判定传输挂死（设计 5.8）
+
 type SessionCallbacks = {
   onOffer: (offer: OfferSummary) => void
   onProgress: (p: ReceiveProgress) => void
@@ -42,7 +44,7 @@ export class Receiver extends EventEmitter {
   private server: net.Server | null = null
   private readonly sessions = new Map<string, Session>()
 
-  constructor(private readonly opts: { port: number; saveDir: () => string }) {
+  constructor(private readonly opts: { port: number; saveDir: () => string; noDataTimeoutMs?: number }) {
     super()
   }
 
@@ -50,7 +52,7 @@ export class Receiver extends EventEmitter {
   start(): void {
     if (this.server) return
     const server = net.createServer((socket) => {
-      const session = new Session(socket, this.opts.saveDir(), {
+      const session = new Session(socket, this.opts.saveDir(), this.opts.noDataTimeoutMs ?? NO_DATA_TIMEOUT_MS, {
         onOffer: (offer) => {
           this.sessions.delete('pending')
           this.sessions.set(offer.transferId, session)
@@ -114,15 +116,19 @@ class Session extends EventEmitter {
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
   private lastProgressAt = 0
+  private lastDataAt = 0 // 最近一次收到数据的时间（无数据超时检查）
+  private idleTimer: NodeJS.Timeout | null = null
 
   constructor(
     private readonly socket: net.Socket,
     private readonly defaultDir: string,
+    private readonly noDataTimeoutMs: number,
     private readonly ev: SessionCallbacks
   ) {
     super()
     socket.setNoDelay(true)
     socket.on('data', (chunk: Buffer | string) => {
+      this.lastDataAt = Date.now()
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
       try {
         this.onData(buf)
@@ -273,6 +279,19 @@ class Session extends EventEmitter {
       await fs.mkdir(path.join(this.targetDir, rel), { recursive: true })
     }
     if (!this.closed) this.socket.write(encodeFrame({ type: 'ACCEPT', transferId: this.transferId }))
+    this.startIdleCheck() // 接受后启用无数据超时：30 秒无数据则判定挂死
+  }
+
+  // 无数据超时：接受后启动周期检查，最近一次收数据超过阈值即失败
+  private startIdleCheck(): void {
+    if (this.idleTimer) return
+    this.lastDataAt = Date.now()
+    const interval = Math.min(10_000, Math.max(50, Math.floor(this.noDataTimeoutMs / 4)))
+    this.idleTimer = setInterval(() => {
+      if (!this.closed && Date.now() - this.lastDataAt > this.noDataTimeoutMs) {
+        this.fail(new Error(`传输超时：${Math.round(this.noDataTimeoutMs / 1000)} 秒无数据`))
+      }
+    }, interval)
   }
 
   // 检查指定目录下是否存在与传输清单重名的文件/目录
@@ -337,6 +356,10 @@ class Session extends EventEmitter {
   }
 
   private cleanup(): void {
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer)
+      this.idleTimer = null
+    }
     if (this.current) {
       void this.current.sink.abort()
       this.current = null
