@@ -23,7 +23,6 @@
       <el-tag type="warning" size="small" closable @close="deviceStore.target = null">
         手动目标：{{ manualTarget.host }}:{{ manualTarget.tcpPort }}
       </el-tag>
-      <div class="manual-tip">拖拽文件到右侧即可发送（连接在发送时建立）</div>
     </div>
   </div>
 </template>
@@ -84,5 +83,4 @@ async function connectManual(): Promise<void> {
 .device-meta { color: var(--el-text-color-secondary); font-size: 12px; }
 .manual { display: flex; gap: 6px; }
 .manual-target { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-.manual-tip { font-size: 12px; color: var(--el-text-color-secondary); }
 </style>
