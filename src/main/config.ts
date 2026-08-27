@@ -12,6 +12,15 @@ export interface AppConfig {
   saveDir: string
 }
 
+// 环境变量覆盖（本机多实例验证/调试）：LOCALSHARE_USER_DATA / LOCALSHARE_UDP_PORT /
+// LOCALSHARE_TCP_PORT / LOCALSHARE_DEVICE_NAME / LOCALSHARE_SAVE_DIR
+function envNumber(name: string): number | undefined {
+  const v = process.env[name]
+  if (!v) return undefined
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 let cached: AppConfig | null = null
 
 function configPath(): string {
@@ -26,14 +35,23 @@ function load(): AppConfig {
     tcpPort: 45556,
     saveDir: path.join(os.homedir(), 'LocalShare')
   }
+  // 环境变量优先于持久化配置
+  const env: Partial<AppConfig> = {}
+  const envUdp = envNumber('LOCALSHARE_UDP_PORT')
+  const envTcp = envNumber('LOCALSHARE_TCP_PORT')
+  if (envUdp) env.udpPort = envUdp
+  if (envTcp) env.tcpPort = envTcp
+  if (process.env.LOCALSHARE_DEVICE_NAME) env.deviceName = process.env.LOCALSHARE_DEVICE_NAME
+  if (process.env.LOCALSHARE_SAVE_DIR) env.saveDir = process.env.LOCALSHARE_SAVE_DIR
   try {
     const raw = JSON.parse(readFileSync(configPath(), 'utf8')) as Partial<AppConfig>
-    return { ...def, ...raw }
+    return { ...def, ...raw, ...env }
   } catch {
     // 首次运行：生成默认配置并持久化
+    const merged = { ...def, ...env }
     mkdirSync(path.dirname(configPath()), { recursive: true })
-    writeFileSync(configPath(), JSON.stringify(def, null, 2), 'utf8')
-    return def
+    writeFileSync(configPath(), JSON.stringify(merged, null, 2), 'utf8')
+    return merged
   }
 }
 

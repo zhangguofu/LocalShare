@@ -15,6 +15,11 @@ let discovery: DiscoveryService | null = null
 let receiver: Receiver | null = null
 const senders = new Map<string, Sender>()
 
+// 本机多实例验证/调试：LOCALSHARE_USER_DATA 隔离配置（deviceId/端口/设备名独立）
+if (process.env.LOCALSHARE_USER_DATA) {
+  app.setPath('userData', process.env.LOCALSHARE_USER_DATA)
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 900,
