@@ -13,7 +13,7 @@
             type="danger"
             @click="cancel(item.transferId)"
           >取消</el-button>
-          <el-tag :type="tagType(item.state)" size="small">{{ stateText(item.state) }}</el-tag>
+          <el-tag :type="tagType(item.state)" size="small">{{ stateText(item.state, item.kind) }}</el-tag>
         </span>
       </div>
       <el-progress
@@ -46,8 +46,9 @@ function tagType(s: TransferItem['state']): 'success' | 'danger' | 'warning' | '
   if (s === 'transferring') return 'warning'
   return 'info'
 }
-function stateText(s: TransferItem['state']): string {
-  return { 'waiting-confirm': '等待确认', transferring: '传输中', complete: '已完成', failed: '失败', rejected: '已拒绝' }[s]
+function stateText(s: TransferItem['state'], kind: TransferItem['kind']): string {
+  if (s === 'complete') return kind === 'outgoing' ? '已发送' : '已接收'
+  return { 'waiting-confirm': '等待确认', transferring: '传输中', failed: '失败', rejected: '已拒绝' }[s]
 }
 function formatBytes(n: number): string {
   if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
