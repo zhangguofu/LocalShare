@@ -16,11 +16,16 @@ let win: BrowserWindow | null = null
 let discovery: DiscoveryService | null = null
 let receiver: Receiver | null = null
 const senders = new Map<string, Sender>()
+let isQuitting = false // Cmd+Q / Dock 退出时置位，放行真正的窗口关闭
 
 // 本机多实例验证/调试：LOCALSHARE_USER_DATA 隔离配置（deviceId/端口/设备名独立）
 if (process.env.LOCALSHARE_USER_DATA) {
   app.setPath('userData', process.env.LOCALSHARE_USER_DATA)
 }
+
+app.on('before-quit', () => {
+  isQuitting = true
+})
 
 function createWindow(): void {
   win = new BrowserWindow({
@@ -31,6 +36,14 @@ function createWindow(): void {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false
+    }
+  })
+  // macOS 惯例：关窗 = 隐藏窗口（保留渲染进程状态：手动目标/传输记录/设备列表）；
+  // Cmd+Q 或 Dock 退出（isQuitting）才真正销毁窗口。Windows 关窗即退出（走 window-all-closed）。
+  win.on('close', (e) => {
+    if (process.platform === 'darwin' && !isQuitting) {
+      e.preventDefault()
+      win?.hide()
     }
   })
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -214,7 +227,12 @@ app.whenReady().then(() => {
   createWindow()
   startServices()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // macOS：Dock 点击恢复隐藏的窗口；窗口被销毁（极少见）则重建
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    } else {
+      win?.show()
+    }
   })
 })
 
