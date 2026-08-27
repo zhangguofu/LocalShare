@@ -22,12 +22,17 @@
         :format="() => formatBytes(item.doneBytes) + ' / ' + formatBytes(item.totalBytes)"
       />
       <div v-if="item.reason" class="reason">{{ item.reason }}</div>
+      <div v-if="item.state === 'complete' && item.saveDir" class="saved-row">
+        <span class="saved-path">已保存到：{{ item.saveDir }}</span>
+        <el-button size="small" text type="primary" @click="openFolder(item.saveDir)">打开文件夹</el-button>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { useTransferStore, type TransferItem } from '../stores/transfer'
+import { ElMessage } from 'element-plus'
 
 const transferStore = useTransferStore()
 
@@ -54,6 +59,11 @@ function formatBytes(n: number): string {
 function cancel(transferId: string): void {
   window.api.cancelTransfer(transferId)
 }
+
+async function openFolder(dir: string): Promise<void> {
+  const err = await window.api.openPath(dir)
+  if (err) ElMessage.error('无法打开文件夹：' + err)
+}
 </script>
 
 <style scoped>
@@ -61,4 +71,6 @@ function cancel(transferId: string): void {
 .transfer-item .row { display: flex; justify-content: space-between; align-items: center; }
 .row-right { display: flex; align-items: center; gap: 8px; }
 .reason { color: var(--el-color-danger); font-size: 12px; margin-top: 4px; }
+.saved-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.saved-path { font-size: 12px; color: var(--el-text-color-secondary); word-break: break-all; }
 </style>

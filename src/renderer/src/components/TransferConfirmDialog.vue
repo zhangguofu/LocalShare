@@ -14,7 +14,9 @@
           内容：<b>{{ offer.files.length === 1 ? offer.files[0].path : offer.fileCount + ' 项' }}</b>
           （{{ formatBytes(offer.totalBytes) }}）
         </p>
-        <p>保存到：{{ saveDir }}</p>
+        <p>
+          保存到：<el-link type="primary" @click="openSaveDir">{{ saveDir }}</el-link>
+        </p>
         <el-alert
           v-if="offer.conflicts"
           type="warning"
@@ -71,6 +73,12 @@ async function chooseOtherDir(): Promise<void> {
   window.api.respondTransfer(offer.value.transferId, 'accept', dir)
   transferStore.clearOffer()
   ElMessage.success('已选择新位置接收')
+}
+
+async function openSaveDir(): Promise<void> {
+  if (!saveDir.value) return
+  const err = await window.api.openPath(saveDir.value)
+  if (err) ElMessage.error('无法打开文件夹：' + err)
 }
 </script>
 

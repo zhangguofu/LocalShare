@@ -11,6 +11,7 @@ export interface TransferItem {
   totalBytes: number
   doneBytes: number
   reason?: string
+  saveDir?: string // 接收方完成时的实际保存目录
 }
 
 export const useTransferStore = defineStore('transfer', () => {
@@ -41,6 +42,7 @@ export const useTransferStore = defineStore('transfer', () => {
     } else if (u.kind === 'complete') {
       item.state = 'complete'
       item.doneBytes = item.totalBytes
+      item.saveDir = u.saveDir
     } else if (u.kind === 'failed' || u.kind === 'error') {
       item.state = 'failed'
       item.reason = u.reason

@@ -12,6 +12,7 @@ export interface TransferUpdate {
   fileName?: string
   totalBytes?: number
   reason?: string
+  saveDir?: string // 接收方完成时携带实际保存目录
 }
 
 export interface Api {
@@ -22,6 +23,7 @@ export interface Api {
   onDeviceChange: (cb: (upd: DeviceUpdate) => void) => () => void
   pickPaths: () => Promise<string[]>
   pickDirectory: () => Promise<string | null>
+  openPath: (p: string) => Promise<string>
   sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string }>
   cancelTransfer: (transferId: string) => void
   onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
@@ -42,6 +44,7 @@ const api: Api = {
   },
   pickPaths: () => ipcRenderer.invoke('dialog:pick-paths'),
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
+  openPath: (p) => ipcRenderer.invoke('shell:open-path', p),
   sendTransfer: (target, paths) => ipcRenderer.invoke('transfer:send', target, paths),
   cancelTransfer: (transferId) => ipcRenderer.send('transfer:cancel', transferId),
   onTransferUpdate: (cb) => {

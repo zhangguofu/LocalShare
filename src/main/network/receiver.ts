@@ -34,7 +34,7 @@ export interface ReceiveProgress {
 type SessionCallbacks = {
   onOffer: (offer: OfferSummary) => void
   onProgress: (p: ReceiveProgress) => void
-  onComplete: (transferId: string) => void
+  onComplete: (transferId: string, saveDir: string) => void
   onError: (transferId: string, err: Error) => void
 }
 
@@ -57,7 +57,7 @@ export class Receiver extends EventEmitter {
           this.emit('offer', offer)
         },
         onProgress: (p) => this.emit('progress', p),
-        onComplete: (id) => this.emit('complete', id),
+        onComplete: (id, saveDir) => this.emit('complete', id, saveDir),
         onError: (id, err) => this.emit('transferError', { transferId: id, error: err })
       })
       this.sessions.set('pending', session)
@@ -302,7 +302,7 @@ class Session extends EventEmitter {
       throw new Error('protocol error: TRANSFER_DONE during file transfer')
     }
     this.socket.write(encodeFrame({ type: 'TRANSFER_ACK', transferId: this.transferId }))
-    this.ev.onComplete(this.transferId)
+    this.ev.onComplete(this.transferId, this.targetDir ?? this.defaultDir)
     this.socket.end()
     this.cleanup()
   }

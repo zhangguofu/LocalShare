@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -127,6 +127,11 @@ function registerIpc(): void {
       // 失败已通过 'failed' 事件上报 UI
     })
     return { transferId }
+  })
+
+  ipcMain.handle('shell:open-path', async (_e, p: string) => {
+    if (!p) return '路径为空'
+    return shell.openPath(p)
   })
 
   ipcMain.on('transfer:cancel', (_e, transferId: string) => {
