@@ -1,4 +1,5 @@
 import dgram from 'node:dgram'
+import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { encodeFrame, decodeFrame, MAX_DISCOVERY_LENGTH, type Message } from './protocol'
 import { applyPacket, reapDevices, type DeviceInfo, type DeviceUpdate } from './deviceTable'
@@ -16,6 +17,30 @@ export interface DiscoveryOptions {
   broadcastAddress?: string
   helloIntervalMs?: number
   offlineTimeoutMs?: number
+}
+
+// 计算 IPv4 子网定向广播地址（ip & netmask | ~netmask）
+function calcBroadcast(ip: string, netmask: string): string | null {
+  const ipParts = ip.split('.').map(Number)
+  const maskParts = netmask.split('.').map(Number)
+  if (ipParts.length !== 4 || maskParts.length !== 4) return null
+  if ([...ipParts, ...maskParts].some((n) => Number.isNaN(n))) return null
+  const b = ipParts.map((n, i) => (n & maskParts[i]) | (255 & ~maskParts[i]))
+  return b.join('.')
+}
+
+// 枚举本机所有非回环 IPv4 接口的子网广播地址
+function getBroadcastAddresses(): string[] {
+  const addrs: string[] = []
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const addr of ifaces ?? []) {
+      if (addr.family === 'IPv4' && !addr.internal && addr.address && addr.netmask) {
+        const bcast = calcBroadcast(addr.address, addr.netmask)
+        if (bcast) addrs.push(bcast)
+      }
+    }
+  }
+  return [...new Set(addrs)]
 }
 
 export class DiscoveryService extends EventEmitter {
@@ -46,7 +71,11 @@ export class DiscoveryService extends EventEmitter {
       try {
         const parsed = decodeFrame(msg) as Message
         const upd: DeviceUpdate | null = applyPacket(this.devices, this.opts.deviceId, parsed, Date.now(), rinfo.address)
-        if (upd) this.emit('deviceChange', upd)
+        if (upd) {
+          if (upd.kind === 'added') console.log(`[discovery] 设备上线: ${upd.device.name} (${upd.device.host}:${upd.device.tcpPort})`)
+          else if (upd.kind === 'removed') console.log(`[discovery] 设备离线: ${upd.device.name}`)
+          this.emit('deviceChange', upd)
+        }
       } catch {
         // 非本协议报文（magic 不符 / JSON 非法）：静默忽略
       }
@@ -63,6 +92,7 @@ export class DiscoveryService extends EventEmitter {
     socket.bind(this.opts.port, () => {
       this.bound = true
       socket.setBroadcast(true)
+      console.log(`[discovery] 监听 UDP ${this.opts.port}，广播目标: ${this.broadcastTargets().join(', ')}`)
       this.sendHello()
       this.emit('listening')
       const interval = this.opts.helloIntervalMs ?? HELLO_INTERVAL_MS
@@ -87,6 +117,13 @@ export class DiscoveryService extends EventEmitter {
     this.broadcast({ type: 'BYE', deviceId: this.opts.deviceId })
   }
 
+  // 广播目标：测试/手动指定时用指定地址；否则向本机每个接口的子网广播地址发送
+  private broadcastTargets(): string[] {
+    if (this.opts.broadcastAddress) return [this.opts.broadcastAddress]
+    const targets = getBroadcastAddresses()
+    return targets.length > 0 ? targets : ['255.255.255.255']
+  }
+
   private broadcast(msg: Message): void {
     if (!this.socket || !this.running) return
     let frame: Buffer
@@ -95,10 +132,11 @@ export class DiscoveryService extends EventEmitter {
     } catch {
       return
     }
-    const address = this.opts.broadcastAddress ?? '255.255.255.255'
-    this.socket.send(frame, this.opts.port, address, (err) => {
-      if (err) console.warn('[discovery] send failed:', err.message)
-    })
+    for (const address of this.broadcastTargets()) {
+      this.socket.send(frame, this.opts.port, address, (err) => {
+        if (err) console.warn('[discovery] send failed to', address, ':', err.message)
+      })
+    }
   }
 
   private reap(): void {
