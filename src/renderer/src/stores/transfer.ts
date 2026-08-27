@@ -30,6 +30,17 @@ export const useTransferStore = defineStore('transfer', () => {
     pendingOffer.value = offer
   }
 
+  function pushOutgoing(info: { transferId: string; name: string; totalBytes: number }): void {
+    items.value.unshift({
+      transferId: info.transferId,
+      kind: 'outgoing',
+      name: info.name,
+      state: 'waiting-confirm',
+      totalBytes: info.totalBytes,
+      doneBytes: 0
+    })
+  }
+
   function applyUpdate(u: TransferUpdate): void {
     const item = items.value.find((i) => i.transferId === u.transferId)
     if (!item) return
@@ -53,5 +64,5 @@ export const useTransferStore = defineStore('transfer', () => {
     pendingOffer.value = null
   }
 
-  return { items, pendingOffer, pushOffer, applyUpdate, clearOffer }
+  return { items, pendingOffer, pushOffer, pushOutgoing, applyUpdate, clearOffer }
 })

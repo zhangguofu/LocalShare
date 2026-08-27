@@ -24,7 +24,7 @@ export interface Api {
   pickPaths: () => Promise<string[]>
   pickDirectory: () => Promise<string | null>
   openPath: (p: string) => Promise<string>
-  sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string }>
+  sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string; name: string; totalBytes: number; fileCount: number }>
   cancelTransfer: (transferId: string) => void
   onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
   onOffer: (cb: (offer: OfferSummary) => void) => () => void

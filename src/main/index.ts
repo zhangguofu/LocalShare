@@ -176,6 +176,7 @@ function registerIpc(): void {
     }
     const { entries, totalBytes } = await walkPaths(paths)
     if (entries.length === 0) throw new Error('没有可发送的内容（空选择或仅符号链接）')
+    const name = entries.length === 1 ? entries[0].relPath : `${entries.length} 项`
     const transferId = randomUUID()
     const sender = new Sender({ senderId: getConfig().deviceId, senderName: getConfig().deviceName })
     senders.set(transferId, sender)
@@ -191,7 +192,7 @@ function registerIpc(): void {
     void sender.start({ host, port }, transferId, entries, totalBytes).catch(() => {
       // 失败已通过 'failed' 事件上报 UI
     })
-    return { transferId }
+    return { transferId, name, totalBytes, fileCount: entries.length }
   })
 
   ipcMain.handle('shell:open-path', async (_e, p: string) => {

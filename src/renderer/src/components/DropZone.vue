@@ -9,11 +9,13 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useDeviceStore } from '../stores/device'
+import { useTransferStore } from '../stores/transfer'
 import type { TransferTarget } from '../../../preload'
 import type { DeviceInfo } from '../../../main/network/deviceTable'
 
 const over = ref(false)
 const deviceStore = useDeviceStore()
+const transferStore = useTransferStore()
 
 // DeviceInfo → TransferTarget：手动直连设备走 host/port，发现设备走 deviceId
 function toTarget(d: DeviceInfo): TransferTarget {
@@ -40,7 +42,8 @@ async function send(paths: string[]): Promise<void> {
     return
   }
   try {
-    await window.api.sendTransfer(toTarget(deviceStore.target), paths)
+    const result = await window.api.sendTransfer(toTarget(deviceStore.target), paths)
+    transferStore.pushOutgoing(result)
     ElMessage.success('已发起传输，等待对方确认')
   } catch (err) {
     ElMessage.error((err as Error).message)
