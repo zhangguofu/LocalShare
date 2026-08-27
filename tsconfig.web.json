@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/renderer/src/**/*.ts", "src/renderer/src/**/*.vue"]
+  "include": ["src/renderer/src/**/*.ts", "src/renderer/src/**/*.vue", "src/main/**/*.ts", "src/preload/**/*.ts"]
 }
