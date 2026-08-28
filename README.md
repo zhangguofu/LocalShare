@@ -99,13 +99,12 @@ src/
   renderer/        # Vue3 UI：设备列表、拖放区、传输队列、确认对话框、设置
 tests/             # 单元 + 集成测试（真实 UDP/TCP 回环）
 scripts/           # 双节点互传验证脚本（verify-transfer.mts）
-docs/              # 设计文档、实施计划、环境搭建指南
+docs/              # 设计文档、环境搭建指南
 ```
 
 ## 文档索引
 
 - [设计文档](docs/2026-08-27-localshare-design.md)——需求基线、架构、协议规格（帧格式/消息/状态机）、测试策略
-- [实施计划](docs/2026-08-27-localshare.md)——任务分解与实现记录
 - [Windows 构建指南](docs/BUILD-WINDOWS.md) / [macOS 构建指南](docs/BUILD-MACOS.md)
 
 ## 已知限制（当前版本）
