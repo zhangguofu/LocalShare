@@ -46,6 +46,16 @@ npm run build:mac  # 或 build:win 打包
 
 发现失效时（跨 VLAN / AP 隔离 / 防火墙拦截广播）：左侧输入 `对方IP:端口`（默认 `45556`）手动直连。
 
+## 版本号管理
+
+版本号**唯一来源是 `package.json` 的 `version` 字段**，改一处即全局生效：
+
+- 安装包文件名（如 `LocalShare-0.1.0.dmg`）
+- 界面展示（设置对话框底部「版本 vX.Y.Z」）
+- 设备列表对端版本（HELLO 广播携带，`app.getVersion()` 读取）
+
+发版流程：修改 `package.json` 的 `version` → `npm run build:mac` / `build:win` → 产物文件名与界面版本自动跟随。
+
 ## 目录结构
 
 ```

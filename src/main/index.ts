@@ -141,6 +141,7 @@ function startServices(): void {
 
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
+  ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('config:get', () => getConfig())
   ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
     // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）

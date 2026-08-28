@@ -23,6 +23,7 @@
       />
     </el-form>
     <template #footer>
+      <span class="version">版本 v{{ version }}</span>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" :loading="saving" @click="save">保存</el-button>
     </template>
@@ -30,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { AppConfig } from '../../../main/config'
 
@@ -44,6 +45,11 @@ const form = reactive<AppConfig>({
   saveDir: ''
 })
 const saving = ref(false)
+const version = ref('')
+
+onMounted(async () => {
+  version.value = await window.api.getVersion()
+})
 
 // 打开时从当前配置加载
 watch(visible, async (open) => {
@@ -91,4 +97,5 @@ async function save(): Promise<void> {
 <style scoped>
 .dir-row { display: flex; gap: 8px; width: 100%; }
 .dir-row .el-input { flex: 1; }
+.version { color: var(--el-text-color-secondary); font-size: 12px; margin-right: auto; }
 </style>

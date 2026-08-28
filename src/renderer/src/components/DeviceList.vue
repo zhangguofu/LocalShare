@@ -11,7 +11,7 @@
         @click="deviceStore.target = d"
       >
         <span class="device-name">{{ d.name }}</span>
-        <span class="device-meta">{{ d.host }}:{{ d.tcpPort }}</span>
+        <span class="device-meta">{{ d.host }}:{{ d.tcpPort }} · v{{ d.version }}</span>
       </div>
     </div>
     <el-divider />
