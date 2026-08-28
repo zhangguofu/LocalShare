@@ -63,13 +63,9 @@ function formatBytes(n: number): string {
   return n + ' B'
 }
 
-// 进度文字：百分比（两位小数）· 已传/总 · 实时速度（速度让用户确认传输仍在进行）
+// 进度文字：百分比（两位小数）· 已传/总
 function formatText(item: TransferItem): string {
-  const base = `${percentText(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
-  if (item.speed !== undefined) {
-    return `${base} · ${formatBytes(item.speed)}/s`
-  }
-  return base
+  return `${percentText(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
 }
 
 function cancel(transferId: string): void {
