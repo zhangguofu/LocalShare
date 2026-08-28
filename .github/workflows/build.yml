@@ -28,8 +28,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        # 严格按 package-lock.json 安装（可复现 + 更快 + lock 不一致时提前报错）
         # 走仓库 .npmrc（npmmirror 镜像，含 Electron 二进制与 electron-builder 工具链）
-        run: npm install
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
