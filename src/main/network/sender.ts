@@ -161,8 +161,8 @@ export class Sender extends EventEmitter {
     }
   }
 
-  // 取消：停数据流 → 尽力发 CANCEL（对端若在 CTRL 模式可识别为"取消"；被数据吞掉由 FIN 兜底）→ FIN（对端可靠感知）
-  // 对端语义：收到 FIN（end 事件）视为"对方已取消"，RST/超时视为"连接断开"
+  // 取消：停数据流 → 尽力发 CANCEL（对端若在 CTRL 模式可识别为取消；被数据吞掉由 FIN 兜底）→ FIN → 短延迟强制关闭
+  // 对端语义：收到 FIN（end 事件）视为对方已取消，RST/超时视为连接断开
   cancel(reason = 'user_cancelled'): void {
     if (!this.socket || !this.transferId) return
     const id = this.transferId
@@ -171,14 +171,19 @@ export class Sender extends EventEmitter {
       this.currentStream.destroy(new Error('transfer aborted'))
       this.currentStream = null
     }
+    const sock = this.socket
+    this.socket = null
     try {
-      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
+      sock.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
     } catch {
       // 对端可能已断开，忽略
     }
     this.emit('failed', { transferId: id, reason: 'cancelled' })
-    this.socket.end() // FIN：TCP 层可靠送达
-    this.socket = null
+    sock.end() // FIN：TCP 层可靠送达
+    // CANCEL 已 flush（毫秒级）后强制关闭连接，避免半开连接挂住对端/本端资源
+    setTimeout(() => {
+      if (!sock.destroyed) sock.destroy()
+    }, 100)
   }
 
   private onMessage(msg: Message): void {

@@ -309,10 +309,11 @@ class Session extends EventEmitter {
     this.cleanup()
   }
 
-  // 传输中取消：发 CANCEL（尽力）→ FIN（对端可靠感知为"取消"）→ 本地清理 .part
-  // 对端语义：收到 FIN（end 事件）视为"对方已取消"，RST/超时视为"连接断开"
+  // 传输中取消：发 CANCEL（尽力）→ FIN → 短延迟强制关闭连接 → 本地清理 .part
+  // 对端语义：收到 FIN（end 事件）视为对方已取消，RST/超时视为连接断开
   cancel(reason: string): void {
     if (this.closed) return
+    this.closed = true // 取消后立即置位：后续在途数据/消息全部忽略，防止 write after end
     try {
       this.socket.write(encodeFrame({ type: 'CANCEL', transferId: this.transferId, reason }))
     } catch {
@@ -320,6 +321,10 @@ class Session extends EventEmitter {
     }
     this.socket.end() // FIN：TCP 层可靠送达
     this.cleanup() // 本地 .part 立即清理
+    // CANCEL 已 flush（毫秒级）后强制关闭连接，避免半开连接挂住 server.close/资源
+    setTimeout(() => {
+      if (!this.socket.destroyed) this.socket.destroy()
+    }, 100)
   }
 
   // 立即断开连接（Receiver.stop 调用），触发 close 清理
