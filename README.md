@@ -61,7 +61,7 @@ npm run release                # patch +1（0.1.0 → 0.1.1），macOS 打 dmg /
 npm run release -- --minor     # minor +1
 npm run release -- --major     # major +1
 npm run release -- --version=1.2.3   # 指定版本
-npm run release -- --no-sign   # macOS 无证书/沙箱环境跳过签名
+npm run release -- --sign      # macOS 显式启用代码签名（默认不签名，需本机开发者证书）
 npm run release -- --arch=x64  # 指定架构（mac：x64|arm64|universal|both；win：x64|arm64）
 ```
 

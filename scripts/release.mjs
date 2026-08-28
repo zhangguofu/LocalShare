@@ -5,7 +5,8 @@
 //   npm run release -- --minor      # minor +1（0.1.0 → 0.2.0）
 //   npm run release -- --major      # major +1（0.1.0 → 1.0.0）
 //   npm run release -- --version=1.2.3   # 指定版本
-//   npm run release -- --no-sign    # mac 跳过签名（无证书/沙箱环境）
+//   npm run release -- --no-sign    # mac 跳过签名（已默认不签名，此参数保留兼容）
+//   npm run release -- --sign       # mac 显式启用代码签名（需本机钥匙串有开发者证书）
 //   npm run release -- --arch=x64   # 指定架构：x64 | arm64 | universal | both
 //                                  #   mac 默认按本机架构；universal/both 打多架构
 //                                  #   win 默认 x64，可用 arm64
@@ -22,12 +23,12 @@ const HOST_ARCH = os.arch() // x64 / arm64（真实内核架构，避免 Rosetta
 
 // ---- 参数解析 ----
 const args = process.argv.slice(2)
-const opts = { minor: false, major: false, explicit: null, noSign: false, arch: null }
+const opts = { minor: false, major: false, explicit: null, sign: false, arch: null }
 for (let i = 0; i < args.length; i++) {
   const a = args[i]
   if (a === '--minor') opts.minor = true
   else if (a === '--major') opts.major = true
-  else if (a === '--no-sign') opts.noSign = true
+  else if (a === '--sign') opts.sign = true
   else if (a === '--arch') opts.arch = args[++i]
   else if (a.startsWith('--arch=')) opts.arch = a.slice('--arch='.length)
   else if (a === '--version') opts.explicit = args[++i]
@@ -59,9 +60,9 @@ const run = (cmd) => execSync(cmd, { cwd: root, stdio: 'inherit' })
 console.log('▶ 构建...')
 run('npm run build')
 
-// macOS：区分 Intel(x64) / Apple Silicon(arm64)，支持 universal（通用二进制）与 both（两个独立包）
+// macOS：默认不签名（避免钥匙串授权弹窗）；--sign 显式启用代码签名（需本机证书）
 if (process.platform === 'darwin') {
-  const sign = opts.noSign ? ' -c.mac.identity=null' : ''
+  const sign = opts.sign ? '' : ' -c.mac.identity=null'
   const arch = opts.arch ?? HOST_ARCH
   let target
   if (arch === 'universal') {
