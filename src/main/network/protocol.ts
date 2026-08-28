@@ -3,7 +3,7 @@ export const MAGIC = Buffer.from([0x4c, 0x53, 0x31, 0x00]) // "LS1\0"
 export const HEADER_LENGTH = 8
 export const MAX_FRAME_LENGTH = 16 * 1024 * 1024
 export const MAX_DISCOVERY_LENGTH = 1024
-export const CANCEL_ACK_TIMEOUT_MS = 1500 // 优雅取消：发 CANCEL 后等待对方 CANCEL_ACK 的时限（局域网 RTT 毫秒级）
+export const CANCEL_ACK_TIMEOUT_MS = 3000 // 优雅取消：发 CANCEL 后等待对方 CANCEL_ACK 的时限（局域网 RTT 毫秒级，3s 宽裕）
 
 // ---- 消息类型（协议 5.3 + 发现消息 4.3） ----
 export interface FileEntry {
