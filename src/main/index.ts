@@ -38,12 +38,12 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
-  // macOS 惯例：关窗 = 隐藏窗口（保留渲染进程状态：手动目标/传输记录/设备列表）；
-  // Cmd+Q 或 Dock 退出（isQuitting）才真正销毁窗口。Windows 关窗即退出（走 window-all-closed）。
+  // 关窗 = 最小化（双平台统一）：窗口收进任务栏/Dock，应用驻留后台继续接收；
+  // 彻底退出：Cmd+Q（macOS）或设置页「退出应用」（isQuitting 放行）
   win.on('close', (e) => {
-    if (process.platform === 'darwin' && !isQuitting) {
+    if (!isQuitting) {
       e.preventDefault()
-      win?.hide()
+      win?.minimize()
     }
   })
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -142,6 +142,7 @@ function startServices(): void {
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('app:quit', () => app.quit())
   ipcMain.handle('config:get', () => getConfig())
   ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
     // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）
@@ -252,17 +253,19 @@ app.whenReady().then(() => {
   createWindow()
   startServices()
   app.on('activate', () => {
-    // macOS：Dock 点击恢复隐藏的窗口；窗口被销毁（极少见）则重建
+    // 点击 Dock（macOS）：从最小化恢复窗口；窗口被销毁（极少见）则重建
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
     } else {
+      if (win?.isMinimized()) win.restore()
       win?.show()
     }
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // 正常情况窗口不会全部关闭（关窗被拦截为最小化），走到这里说明是真正退出流程
+  app.quit()
 })
 
 app.on('will-quit', () => {
