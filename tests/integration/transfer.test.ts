@@ -197,6 +197,23 @@ describe('端到端传输（回环 TCP）', () => {
     await expect(fs.access(path.join(recvDir, 'a.txt.part'))).rejects.toThrow()
   })
 
+  it('接收方传输中取消：发送方收到取消提示且 .part 无残留', async () => {
+    const srcFile = path.join(root, 'big.bin')
+    await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))
+    const r = await startReceiver()
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-x', [{ relPath: 'big.bin', absPath: srcFile, type: 'file', size: 32 * 1024 * 1024 }], 32 * 1024 * 1024)
+    const offer = await offerP
+    r.respond(offer.transferId, 'accept')
+    // 传输进行中，接收方取消
+    await new Promise((res) => setTimeout(res, 10))
+    r.cancelTransfer(offer.transferId)
+    await expect(sendP).rejects.toThrow(/cancelled/)
+    await new Promise((res) => setTimeout(res, 200))
+    await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
+  })
+
   it('传输中断：接收方清理 .part 不残留', async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7)) // 32MB，确保传输中

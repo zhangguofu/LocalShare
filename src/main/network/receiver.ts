@@ -103,6 +103,13 @@ export class Receiver extends EventEmitter {
     if (!session) return false
     return session.checkConflicts(dir)
   }
+
+  // 传输中取消（设计 5.3：任意一方可主动取消）：发 CANCEL 帧并断开，清理 .part
+  cancelTransfer(transferId: string): void {
+    const session = this.sessions.get(transferId)
+    if (!session) return
+    session.cancel('user_cancelled')
+  }
 }
 
 class Session extends EventEmitter {
@@ -302,6 +309,18 @@ class Session extends EventEmitter {
 
   reject(reason: string): void {
     if (!this.closed) this.socket.write(encodeFrame({ type: 'REJECT', transferId: this.transferId, reason }))
+    this.socket.end()
+    this.cleanup()
+  }
+
+  // 传输中取消：发 CANCEL 帧（flush）后断开，清理 .part
+  cancel(reason: string): void {
+    if (this.closed) return
+    try {
+      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: this.transferId, reason }))
+    } catch {
+      // 对端可能已断开，忽略
+    }
     this.socket.end()
     this.cleanup()
   }

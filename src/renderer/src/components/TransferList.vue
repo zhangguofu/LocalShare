@@ -7,7 +7,7 @@
         <span class="name">{{ item.name }}</span>
         <span class="row-right">
           <el-button
-            v-if="item.state === 'transferring' && item.kind === 'outgoing'"
+            v-if="item.state === 'transferring'"
             size="small"
             text
             type="danger"

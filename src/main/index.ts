@@ -214,7 +214,12 @@ function registerIpc(): void {
   })
 
   ipcMain.on('transfer:cancel', (_e, transferId: string) => {
-    senders.get(transferId)?.cancel()
+    const sender = senders.get(transferId)
+    if (sender) {
+      sender.cancel()
+      return
+    }
+    receiver?.cancelTransfer(transferId)
   })
 
   ipcMain.handle('transfer:check-dir-conflicts', async (_e, transferId: string, dir: string) => {
