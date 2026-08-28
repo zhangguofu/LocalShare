@@ -26,6 +26,8 @@ if (process.env.LOCALSHARE_USER_DATA) {
 
 app.on('before-quit', () => {
   isQuitting = true
+  // closable:false 时 win.close() 无效，会阻断 quit 流程关闭窗口；退出前恢复可关闭
+  win?.setClosable(true)
 })
 
 function createWindow(): void {
@@ -33,6 +35,8 @@ function createWindow(): void {
     width: 900,
     height: 640,
     title: 'LocalShare',
+    autoHideMenuBar: true, // 菜单栏默认不可见（Windows/Linux），按 Alt 临时唤起；macOS 顶栏不受此选项影响
+    closable: false, // 关闭按钮禁用（macOS 红点 / Windows × 变灰），防误关；Linux 未实现此选项
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
