@@ -48,7 +48,8 @@ export class AtomicSink {
 
   open(): void {
     mkdirSync(path.dirname(this.targetPath), { recursive: true })
-    this.stream = createWriteStream(this.partPath, { flags: 'w' })
+    // 1MB 写入缓冲：小块（默认 16KB）在真实网络下增加系统调用与背压抖动，降低吞吐
+    this.stream = createWriteStream(this.partPath, { flags: 'w', highWaterMark: 1024 * 1024 })
   }
 
   write(chunk: Buffer): boolean {

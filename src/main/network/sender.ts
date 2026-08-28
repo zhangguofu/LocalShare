@@ -40,7 +40,8 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
 
 function pipeFile(socket: net.Socket, absPath: string, onBytes: (n: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const stream = createReadStream(absPath)
+    // 大块读取（1MB）减少 data 事件与背压 pause/resume 抖动，显著提升真实网络吞吐
+    const stream = createReadStream(absPath, { highWaterMark: 1024 * 1024 })
     stream.on('error', reject)
     socket.on('error', reject)
     stream.on('data', (chunk: Buffer | string) => {
