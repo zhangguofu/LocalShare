@@ -220,6 +220,8 @@ function registerIpc(): void {
       return
     }
     receiver?.cancelTransfer(transferId)
+    // 接收方主动取消：立即反馈 UI（本地状态不再等对端）
+    win?.webContents.send('transfer:update', { kind: 'failed', transferId, reason: 'cancelled' })
   })
 
   ipcMain.handle('transfer:check-dir-conflicts', async (_e, transferId: string, dir: string) => {

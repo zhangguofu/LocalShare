@@ -162,7 +162,7 @@ export class Sender extends EventEmitter {
     }
   }
 
-  // 优雅取消：发 CANCEL → UI 即时反馈 → 等对方 CANCEL_ACK（1.5s）→ 收到则优雅关闭，超时则强制断开
+  // 优雅取消：发 CANCEL → 立即停止数据流 + UI 即时反馈 → 等对方 CANCEL_ACK（3s）→ 优雅关闭或强制断开
   cancel(reason = 'user_cancelled'): void {
     if (!this.socket || !this.transferId || this.cancelling) return
     this.cancelling = true
@@ -171,6 +171,11 @@ export class Sender extends EventEmitter {
       this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
     } catch {
       // 对端可能已断开，直接进入收尾
+    }
+    // 立即停止数据流：读流销毁 → pipeFile reject → start 收尾（fail 在 cancelling 时让位给 finishCancel）
+    if (this.currentStream) {
+      this.currentStream.destroy(new Error('transfer aborted'))
+      this.currentStream = null
     }
     this.emit('failed', { transferId: id, reason: 'cancelled' }) // UI 即时反馈，不等 ACK
     const timer = setTimeout(() => this.finishCancel(id, 'timeout'), CANCEL_ACK_TIMEOUT_MS)
@@ -236,6 +241,7 @@ export class Sender extends EventEmitter {
 
   private fail(err: Error): void {
     if (!this.transferId && this.socket === null) return
+    if (this.cancelling) return // 优雅取消进行中：由 finishCancel 收尾（保持连接等 ACK）
     const id = this.transferId
     this.transferId = null
     // 销毁当前读流：防止 socket 已毁后读流 pause 永无 drain → pipeFile 挂起

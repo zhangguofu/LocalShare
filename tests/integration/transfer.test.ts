@@ -197,6 +197,28 @@ describe('端到端传输（回环 TCP）', () => {
     await expect(fs.access(path.join(recvDir, 'a.txt.part'))).rejects.toThrow()
   })
 
+  it('发送方传输中取消：接收方快速感知失败（不等 30s 超时）且 .part 无残留', async () => {
+    const srcFile = path.join(root, 'big.bin')
+    await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))
+    const r = await startReceiver()
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-y', [{ relPath: 'big.bin', absPath: srcFile, type: 'file', size: 32 * 1024 * 1024 }], 32 * 1024 * 1024)
+    const offer = await offerP
+    r.respond(offer.transferId, 'accept')
+    await new Promise((res) => setTimeout(res, 10))
+    sender.cancel()
+    // 发送方失败
+    await expect(sendP).rejects.toThrow()
+    // 接收方应通过 end 事件快速感知（FIN → fail），而非等 30s 无数据超时
+    const { error } = await new Promise<{ transferId: string; error: Error }>((res) =>
+      r.once('transferError', (e) => res(e))
+    )
+    expect(error.message).toMatch(/取消|断开/)
+    await new Promise((res) => setTimeout(res, 200)) // 等异步 .part 清理完成
+    await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
+  })
+
   it('接收方传输中取消：发送方收到取消提示且 .part 无残留', async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))

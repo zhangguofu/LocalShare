@@ -124,6 +124,7 @@ class Session extends EventEmitter {
   private offerFiles: { type: 'file' | 'dir'; path: string }[] = [] // 完整清单（二次冲突检测用）
   private closed = false
   private cancelling = false // 优雅取消等待 ACK 中
+  private completed = false // 传输已正常完成（TRANSFER_DONE 处理过）
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
   private lastProgressAt = 0
@@ -148,6 +149,12 @@ class Session extends EventEmitter {
       }
     })
     socket.on('error', (err) => this.fail(err))
+    // 对端关闭写端（FIN：取消或正常结束）：若传输未完成则立即失败，不再等 30s 无数据超时
+    socket.on('end', () => {
+      if (!this.closed && !this.completed && this.transferId !== 'pending') {
+        this.fail(new Error('对端已取消或断开连接'))
+      }
+    })
     socket.on('close', () => {
       this.closed = true
       this.cleanup()
@@ -407,6 +414,7 @@ class Session extends EventEmitter {
     if (this.current) {
       throw new Error('protocol error: TRANSFER_DONE during file transfer')
     }
+    this.completed = true
     this.socket.write(encodeFrame({ type: 'TRANSFER_ACK', transferId: this.transferId }))
     this.ev.onComplete(this.transferId, this.targetDir ?? this.defaultDir)
     this.socket.end()
