@@ -62,7 +62,10 @@ npm run release -- --minor     # minor +1
 npm run release -- --major     # major +1
 npm run release -- --version=1.2.3   # 指定版本
 npm run release -- --no-sign   # macOS 无证书/沙箱环境跳过签名
+npm run release -- --arch=x64  # 指定架构（mac：x64|arm64|universal|both；win：x64|arm64）
 ```
+
+**架构说明（macOS）**：默认按**本机芯片**打包（Intel → x64，Apple Silicon → arm64）；`--arch=universal` 打通用二进制（同时兼容两种芯片），`--arch=both` 分别产出 x64 与 arm64 两个安装包。
 
 脚本逻辑：读 `package.json` → 递增版本尾号（或指定）→ 写回 → `build` → 按当前平台打包（darwin → `.dmg`，win32 → `.exe`）。
 
