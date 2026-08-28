@@ -1,6 +1,6 @@
 {
   "name": "localshare",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "LAN file and folder sharing between Windows and macOS",
   "main": "out/main/index.js",
   "author": "LocalShare",
