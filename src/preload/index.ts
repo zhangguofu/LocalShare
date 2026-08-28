@@ -18,6 +18,7 @@ export interface TransferUpdate {
 export interface Api {
   ping: () => Promise<string>
   getVersion: () => Promise<string>
+  quit: () => void
   getConfig: () => Promise<AppConfig>
   updateConfig: (patch: Partial<AppConfig>) => Promise<AppConfig>
   getDevices: () => Promise<DeviceInfo[]>
@@ -42,6 +43,7 @@ export interface Api {
 const api: Api = {
   ping: () => ipcRenderer.invoke('ping'),
   getVersion: () => ipcRenderer.invoke('app:version'),
+  quit: () => ipcRenderer.send('app:quit'),
   getConfig: () => ipcRenderer.invoke('config:get'),
   updateConfig: (patch) => ipcRenderer.invoke('config:update', patch),
   getDevices: () => ipcRenderer.invoke('devices:list'),

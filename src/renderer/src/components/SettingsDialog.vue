@@ -26,6 +26,7 @@
       <div class="footer-row">
         <span class="version">版本 v{{ version }}</span>
         <span class="spacer"></span>
+        <el-button type="danger" plain @click="quitApp">退出应用</el-button>
         <el-button @click="visible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
@@ -35,7 +36,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { AppConfig } from '../../../main/config'
 
 const visible = defineModel<boolean>({ required: true })
@@ -68,6 +69,19 @@ watch(visible, async (open) => {
 async function pickDir(): Promise<void> {
   const dir = await window.api.pickDirectory()
   if (dir) form.saveDir = dir
+}
+
+async function quitApp(): Promise<void> {
+  try {
+    await ElMessageBox.confirm('退出后应用将停止接收文件。', '退出 LocalShare', {
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    window.api.quit()
+  } catch {
+    // 用户取消
+  }
 }
 
 async function save(): Promise<void> {

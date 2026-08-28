@@ -26,12 +26,6 @@ if (process.env.LOCALSHARE_USER_DATA) {
 
 app.on('before-quit', () => {
   isQuitting = true
-  // closable:false 时 win.close() 无效，会阻断 quit 流程关闭窗口；退出前恢复可关闭并主动销毁
-  // （Windows 上 quit 依赖窗口成功关闭才触发 will-quit，这里显式保证窗口销毁）
-  if (win && !win.isDestroyed()) {
-    win.setClosable(true)
-    win.close()
-  }
 })
 
 function createWindow(): void {
@@ -40,15 +34,15 @@ function createWindow(): void {
     height: 640,
     title: 'LocalShare',
     autoHideMenuBar: true, // 菜单栏默认不可见（Windows/Linux），按 Alt 临时唤起；macOS 顶栏不受此选项影响
-    closable: false, // 关闭按钮禁用（macOS 红点 / Windows × 变灰），防误关；Linux 未实现此选项
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
   })
-  // 关窗行为（业界惯例）：macOS 最小化到 Dock；Windows 隐藏到系统托盘。
-  // 彻底退出：macOS Cmd+Q / 应用菜单；Windows 托盘右键「退出」（isQuitting 放行）
+  // 关窗行为（同类驻留软件惯例）：关闭窗口 = 后台驻留，进程继续接收。
+  // macOS 最小化到 Dock；Windows 隐藏到托盘（点托盘图标恢复）。
+  // 彻底退出：macOS Cmd+Q；Windows 托盘右键「退出」或设置页「退出应用」（isQuitting 放行）
   win.on('close', (e) => {
     if (isQuitting) return
     e.preventDefault()
@@ -154,6 +148,8 @@ function startServices(): void {
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('app:version', () => app.getVersion())
+  // 设置页「退出应用」：完全退出机制的兑底入口（托盘图标可能被系统折叠）
+  ipcMain.on('app:quit', () => app.quit())
   ipcMain.handle('config:get', () => getConfig())
   ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
     // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）
@@ -259,17 +255,12 @@ function registerIpc(): void {
   })
 }
 
-// 生成托盘图标（16×16 蓝色方块；项目暂无自定义图标，用程序生成）
+// 生成托盘图标：内嵌 16×16 蓝色 PNG（原 createFromBitmap 的原始位图字节序平台相关，
+// Windows 上易产生异常图像导致托盘图标不显示；PNG 经 createFromDataURL 解析跨平台可靠）
 function createTrayIcon(): NativeImage {
-  const size = 16
-  const buf = Buffer.alloc(size * size * 4)
-  for (let i = 0; i < size * size; i++) {
-    buf[i * 4] = 0x40
-    buf[i * 4 + 1] = 0x8f
-    buf[i * 4 + 2] = 0xf4
-    buf[i * 4 + 3] = 0xff
-  }
-  return nativeImage.createFromBitmap(buf, { width: size, height: size })
+  const b64 =
+    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGNw6P/ynxLMMGrAqAGjBgwXAwAXB8Ifq/d2QQAAAABJRU5ErkJggg=='
+  return nativeImage.createFromDataURL('data:image/png;base64,' + b64)
 }
 
 // macOS 应用菜单：退出走系统菜单（Cmd+Q），符合平台惯例
@@ -287,19 +278,31 @@ function setupAppMenu(): void {
 // Windows 系统托盘：关窗后驻留，点击恢复窗口，右键菜单退出
 function setupTray(): void {
   if (process.platform === 'darwin' || tray) return
-  tray = new Tray(createTrayIcon())
-  tray.setToolTip('LocalShare')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '打开 LocalShare', click: () => { win?.show(); win?.focus() } },
-      { type: 'separator' },
-      { label: '退出', click: () => app.quit() }
-    ])
-  )
-  tray.on('click', () => {
-    win?.show()
-    win?.focus()
-  })
+  const icon = createTrayIcon()
+  if (icon.isEmpty()) {
+    console.warn('[tray] 托盘图标为空图像，跳过托盘创建')
+    return
+  }
+  try {
+    tray = new Tray(icon)
+    tray.setImage(icon) // Windows 部分版本需要创建后重新 setImage 图标才出现（Electron 已知 workaround）
+    console.log('[tray] 托盘图标已创建')
+    tray.setToolTip('LocalShare')
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: '打开 LocalShare', click: () => { win?.show(); win?.focus() } },
+        { type: 'separator' },
+        { label: '退出', click: () => app.quit() }
+      ])
+    )
+    tray.on('click', () => {
+      win?.show()
+      win?.focus()
+    })
+  } catch (err) {
+    // 托盘创建失败不拖垮主流程（关窗驻留/接收不受影响）
+    console.warn('[tray] 托盘创建失败：', err)
+  }
 }
 
 app.whenReady().then(() => {
