@@ -52,14 +52,14 @@ export const useTransferStore = defineStore('transfer', () => {
       item.state = 'transferring'
       const bytes = u.totalBytes ?? 0
       const now = Date.now()
-      // 速度估算：基于相邻两次上报的字节增量与时间差（间隔 < 0.5s 的样本忽略，防抖动）
-      const prev = lastSample.get(u.transferId)
-      if (prev) {
-        const dt = (now - prev.time) / 1000
-        const db = bytes - prev.bytes
-        if (dt >= 0.5 && db >= 0) item.speed = db / dt
+      // 速度估算：1 秒滑动窗口——进度上报约 50ms 一次，累积足够时间差再计算（避免高频抖动）
+      const win = lastSample.get(u.transferId) ?? { bytes, time: now }
+      const dt = (now - win.time) / 1000
+      if (dt >= 1.0) {
+        const speed = (bytes - win.bytes) / dt
+        if (speed >= 0) item.speed = speed
+        lastSample.set(u.transferId, { bytes, time: now }) // 重置窗口起点
       }
-      lastSample.set(u.transferId, { bytes, time: now })
       item.doneBytes = bytes
     } else if (u.kind === 'complete') {
       item.state = 'complete'

@@ -40,6 +40,12 @@ function percent(item: TransferItem): number {
   if (item.totalBytes === 0) return item.state === 'complete' ? 100 : 0
   return Math.min(100, Math.round((item.doneBytes / item.totalBytes) * 100))
 }
+
+// 百分比文本：两位小数（大文件传输时更可见变化，如 55.32%）
+function percentText(item: TransferItem): string {
+  if (item.totalBytes === 0) return item.state === 'complete' ? '100.00' : '0.00'
+  return ((item.doneBytes / item.totalBytes) * 100).toFixed(2)
+}
 function tagType(s: TransferItem['state']): 'success' | 'danger' | 'warning' | 'info' {
   if (s === 'complete') return 'success'
   if (s === 'failed' || s === 'rejected') return 'danger'
@@ -57,9 +63,9 @@ function formatBytes(n: number): string {
   return n + ' B'
 }
 
-// 进度文字：百分比 · 已传/总 · 实时速度（速度让用户确认传输仍在进行）
+// 进度文字：百分比（两位小数）· 已传/总 · 实时速度（速度让用户确认传输仍在进行）
 function formatText(item: TransferItem): string {
-  const base = `${percent(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
+  const base = `${percentText(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
   if (item.speed !== undefined) {
     return `${base} · ${formatBytes(item.speed)}/s`
   }
