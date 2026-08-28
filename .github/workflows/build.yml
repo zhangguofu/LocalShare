@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # macos-13 = Intel(x64)；macos-latest = Apple Silicon(arm64)；windows-latest = x64
+        os: [macos-13, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write # 发布 Release 需要（tag 触发时）
@@ -37,6 +38,10 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Build (electron-vite)
+        # 关键：先生成 out/ 目录，electron-builder 打包的是 out/main/index.js
+        run: npm run build
 
       - name: Build & package
         # tag 触发 → 发布到 Release；否则仅打包
