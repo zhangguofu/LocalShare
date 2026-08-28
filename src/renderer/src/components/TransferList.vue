@@ -19,7 +19,7 @@
       <el-progress
         v-if="item.state === 'transferring'"
         :percentage="percent(item)"
-        :format="() => formatBytes(item.doneBytes) + ' / ' + formatBytes(item.totalBytes)"
+        :format="() => formatText(item)"
       />
       <div v-if="item.reason" class="reason">{{ item.reason }}</div>
       <div v-if="item.state === 'complete' && item.saveDir" class="saved-row">
@@ -55,6 +55,15 @@ function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB'
   if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
   return n + ' B'
+}
+
+// 进度文字：百分比 · 已传/总 · 实时速度（速度让用户确认传输仍在进行）
+function formatText(item: TransferItem): string {
+  const base = `${percent(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
+  if (item.speed !== undefined) {
+    return `${base} · ${formatBytes(item.speed)}/s`
+  }
+  return base
 }
 
 function cancel(transferId: string): void {

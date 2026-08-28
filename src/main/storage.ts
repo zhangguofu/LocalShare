@@ -3,13 +3,16 @@ import path from 'node:path'
 import os from 'node:os'
 import type { FileEntry } from './network/protocol'
 import { sanitizePath } from './network/protocol'
+import { runPool } from './network/pool'
 
 export function defaultSaveDir(): string {
   return path.join(os.homedir(), 'LocalShare')
 }
 
-// 冲突检测：任一条目的路径组件（含各级目录与最终文件）已存在即为冲突
+// 冲突检测：任一条目的路径组件（含各级目录与最终文件）已存在即为冲突。
+// 并发检查 + 短路（大清单如数万文件时避免串行 fs.access 拖慢 OFFER 处理）
 export async function detectConflicts(entries: FileEntry[], dir: string): Promise<boolean> {
+  const probes: string[] = []
   for (const e of entries) {
     const safe = sanitizePath(e.path)
     if (!safe) continue // 防御：非法路径由接收方在更早阶段拒绝
@@ -17,15 +20,20 @@ export async function detectConflicts(entries: FileEntry[], dir: string): Promis
     let cur = dir
     for (const part of parts) {
       cur = path.join(cur, part)
-      try {
-        await fs.access(cur)
-        return true
-      } catch {
-        // 该级不存在，继续检查下一级
-      }
+      probes.push(cur)
     }
   }
-  return false
+  let found = false
+  await runPool(probes, 64, async (p) => {
+    if (found) return // 短路：已发现冲突，剩余探测跳过
+    try {
+      await fs.access(p)
+      found = true
+    } catch {
+      // 该级不存在，继续
+    }
+  })
+  return found
 }
 
 // 原子落盘：写 .part → commit 时 rename 到目标（覆盖语义由 rename 提供）

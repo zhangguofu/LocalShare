@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { runPool } from './pool'
 
 export interface WalkEntry {
   type: 'file' | 'dir'
@@ -12,6 +13,9 @@ export interface WalkResult {
   entries: WalkEntry[]
   totalBytes: number
 }
+
+const FILE_STAT_CONCURRENCY = 64
+const DIR_WALK_CONCURRENCY = 8
 
 export async function walkPaths(inputPaths: string[]): Promise<WalkResult> {
   const entries: WalkEntry[] = []
@@ -42,16 +46,21 @@ async function walkDir(
     entries.push({ type: 'dir', relPath: dirRel + '/', absPath: dirAbs, size: 0 })
     return
   }
+  const files: { name: string }[] = []
+  const dirs: { name: string }[] = []
   for (const d of dirents) {
     if (d.isSymbolicLink()) continue
-    const childRel = dirRel + '/' + d.name
-    const childAbs = path.join(dirAbs, d.name)
-    if (d.isDirectory()) {
-      await walkDir(childAbs, childRel, entries, addBytes)
-    } else if (d.isFile()) {
-      const st = await fs.stat(childAbs)
-      entries.push({ type: 'file', relPath: childRel, absPath: childAbs, size: st.size })
-      addBytes(st.size)
-    }
+    if (d.isDirectory()) dirs.push(d)
+    else if (d.isFile()) files.push(d)
   }
+  // 文件：并发 stat（大目录下显著提速）；目录：并发递归（限并发防 fd 爆炸）
+  await runPool(files, FILE_STAT_CONCURRENCY, async (d) => {
+    const childAbs = path.join(dirAbs, d.name)
+    const st = await fs.stat(childAbs)
+    entries.push({ type: 'file', relPath: dirRel + '/' + d.name, absPath: childAbs, size: st.size })
+    addBytes(st.size)
+  })
+  await runPool(dirs, DIR_WALK_CONCURRENCY, (d) =>
+    walkDir(path.join(dirAbs, d.name), dirRel + '/' + d.name, entries, addBytes)
+  )
 }

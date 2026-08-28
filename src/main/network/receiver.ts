@@ -14,6 +14,7 @@ import {
   type FileDoneMessage
 } from './protocol'
 import { AtomicSink, detectConflicts } from '../storage'
+import { runPool } from './pool'
 
 export interface OfferSummary {
   transferId: string
@@ -274,10 +275,10 @@ class Session extends EventEmitter {
 
   async accept(targetDir?: string): Promise<void> {
     this.targetDir = targetDir ?? this.defaultDir
-    // 为 OFFER 中的空目录条目创建目录（type:'dir' 不产生文件流）
-    for (const rel of this.dirEntries) {
-      await fs.mkdir(path.join(this.targetDir, rel), { recursive: true })
-    }
+    // 为 OFFER 中的空目录条目创建目录（type:'dir' 不产生文件流）；并发化防大量空目录串行拖慢
+    await runPool(this.dirEntries, 16, async (rel) => {
+      await fs.mkdir(path.join(this.targetDir as string, rel), { recursive: true })
+    })
     if (!this.closed) this.socket.write(encodeFrame({ type: 'ACCEPT', transferId: this.transferId }))
     this.startIdleCheck() // 接受后启用无数据超时：30 秒无数据则判定挂死
   }
