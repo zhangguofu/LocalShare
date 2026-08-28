@@ -26,8 +26,12 @@ if (process.env.LOCALSHARE_USER_DATA) {
 
 app.on('before-quit', () => {
   isQuitting = true
-  // closable:false 时 win.close() 无效，会阻断 quit 流程关闭窗口；退出前恢复可关闭
-  win?.setClosable(true)
+  // closable:false 时 win.close() 无效，会阻断 quit 流程关闭窗口；退出前恢复可关闭并主动销毁
+  // （Windows 上 quit 依赖窗口成功关闭才触发 will-quit，这里显式保证窗口销毁）
+  if (win && !win.isDestroyed()) {
+    win.setClosable(true)
+    win.close()
+  }
 })
 
 function createWindow(): void {
@@ -323,6 +327,9 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   tray?.destroy()
   tray = null
+  // 清理进行中的发送传输：Sender 的 TCP 连接若不关闭会阻止进程退出（任务管理器残留）
+  for (const sender of senders.values()) sender.cancel('app_quit')
+  senders.clear()
   discovery?.stop()
   receiver?.stop()
 })
