@@ -50,7 +50,7 @@ npm run build:mac  # 或 build:win 打包
 
 版本号**唯一来源是 `package.json` 的 `version` 字段**，改一处即全局生效：
 
-- 安装包文件名（如 `LocalShare-0.1.0.dmg`）
+- 安装包文件名（如 `LocalShare-0.1.0-x64.dmg`，带架构标识：`x64` / `arm64` / `universal`；Windows 为 `-x64.exe`）
 - 界面展示（设置对话框底部「版本 vX.Y.Z」）
 - 设备列表对端版本（HELLO 广播携带，`app.getVersion()` 读取）
 

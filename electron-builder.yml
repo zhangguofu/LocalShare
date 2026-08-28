@@ -2,6 +2,8 @@ appId: com.localshare.app
 productName: LocalShare
 directories:
   output: dist
+# 产物文件名带架构标识：LocalShare-0.1.1-x64.dmg / -arm64.dmg / -universal.dmg / -x64.exe
+artifactName: "${productName}-${version}-${arch}.${ext}"
 files:
   - out/**
   - package.json
