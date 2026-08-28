@@ -57,6 +57,8 @@ jobs:
           fi
 
       - name: Build & package
+        # Windows runner 默认 PowerShell，显式指定 bash（git-bash 自带）
+        shell: bash
         # tag 触发 → 发布到 Release；否则仅打包
         # macOS：在 arm64 runner 上交叉打包 x64 + arm64 两个 dmg（GitHub 无 Intel runner）
         run: |
