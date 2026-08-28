@@ -255,9 +255,12 @@ function registerIpc(): void {
   })
 }
 
-// 生成托盘图标：内嵌 16×16 蓝色 PNG（原 createFromBitmap 的原始位图字节序平台相关，
-// Windows 上易产生异常图像导致托盘图标不显示；PNG 经 createFromDataURL 解析跨平台可靠）
+// 生成托盘图标：优先从应用自身可执行文件提取（Windows 上 process.execPath = 应用 exe，
+// 托盘图标与程序图标一致，当前均为 Electron 默认图标；将来更换应用图标后托盘自动跟随）。
+// 提取失败（如 Linux 可执行文件无图标）时回退内嵌 16×16 蓝色 PNG。
 function createTrayIcon(): NativeImage {
+  const fromExec = nativeImage.createFromPath(process.execPath)
+  if (!fromExec.isEmpty()) return fromExec
   const b64 =
     'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGNw6P/ynxLMMGrAqAGjBgwXAwAXB8Ifq/d2QQAAAABJRU5ErkJggg=='
   return nativeImage.createFromDataURL('data:image/png;base64,' + b64)
