@@ -8,10 +8,12 @@ import {
   sanitizePath,
   HEADER_LENGTH,
   MAX_FRAME_LENGTH,
+  CANCEL_ACK_TIMEOUT_MS,
   type Message,
   type OfferMessage,
   type FileHeaderMessage,
-  type FileDoneMessage
+  type FileDoneMessage,
+  type CancelMessage
 } from './protocol'
 import { AtomicSink, detectConflicts } from '../storage'
 import { runPool } from './pool'
@@ -121,6 +123,7 @@ class Session extends EventEmitter {
   private dirEntries: string[] = [] // OFFER 中的 type:'dir' 条目（sanitize 后的路径）
   private offerFiles: { type: 'file' | 'dir'; path: string }[] = [] // 完整清单（二次冲突检测用）
   private closed = false
+  private cancelling = false // 优雅取消等待 ACK 中
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
   private lastProgressAt = 0
@@ -248,7 +251,10 @@ class Session extends EventEmitter {
         await this.onTransferDone(msg)
         break
       case 'CANCEL':
-        this.fail(new Error('cancelled by peer: ' + msg.reason))
+        this.handlePeerCancel(msg)
+        break
+      case 'CANCEL_ACK':
+        this.emit('cancel-ack')
         break
       case 'ERROR':
         this.fail(new Error(`${msg.code}: ${msg.message}`))
@@ -314,15 +320,47 @@ class Session extends EventEmitter {
   }
 
   // 传输中取消：发 CANCEL 帧（flush）后断开，清理 .part
+  // 优雅取消：本地立即清理 .part，等待对方 CANCEL_ACK（1.5s）后优雅关闭，超时则强制断开
   cancel(reason: string): void {
+    if (this.closed || this.cancelling) return
+    this.cancelling = true
+    const id = this.transferId
+    try {
+      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
+    } catch {
+      // 对端可能已断开
+    }
+    this.cleanup() // 本地 .part 立即清理
+    const timer = setTimeout(() => this.finishCancel(id, 'timeout'), CANCEL_ACK_TIMEOUT_MS)
+    this.once('cancel-ack', () => {
+      clearTimeout(timer)
+      this.finishCancel(id, 'ack')
+    })
+  }
+
+  private finishCancel(_id: string, mode: 'ack' | 'timeout'): void {
+    if (this.closed) return
+    this.cancelling = false
+    this.closed = true
+    if (mode === 'ack') this.socket.end() // 优雅：对端已确认取消
+    else this.socket.destroy() // 超时：强制断开
+    this.cleanup()
+    this.emit('closed')
+  }
+
+  // 对端取消：回 CANCEL_ACK 后优雅收尾（不 destroy，保证 ACK flush）
+  private handlePeerCancel(msg: CancelMessage): void {
     if (this.closed) return
     try {
-      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: this.transferId, reason }))
+      this.socket.write(encodeFrame({ type: 'CANCEL_ACK', transferId: msg.transferId }))
     } catch {
-      // 对端可能已断开，忽略
+      // 对端可能已断开
     }
+    this.closed = true
     this.socket.end()
     this.cleanup()
+    this.ev.onError(this.transferId, new Error('cancelled by peer: ' + msg.reason))
+    this.emit('closed')
   }
 
   // 立即断开连接（Receiver.stop 调用），触发 close 清理

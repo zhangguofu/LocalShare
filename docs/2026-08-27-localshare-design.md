@@ -231,6 +231,14 @@
 { "type": "CANCEL", "transferId": "uuid", "reason": "user_cancelled" }
 ```
 
+**CANCEL_ACK（取消接收方 → 取消发起方）**
+
+```json
+{ "type": "CANCEL_ACK", "transferId": "uuid" }
+```
+
+- **优雅取消**：发起方发 `CANCEL` 后保持连接，等待对方回 `CANCEL_ACK`（1.5 秒超时）；收到 ACK 则优雅关闭，超时则强制断开。对方收到 `CANCEL` 后先回 `CANCEL_ACK` 再做本地清理，保证 ACK 送达（TCP flush 后 FIN）。
+
 **ERROR（任意一方，致命错误）**
 
 ```json
