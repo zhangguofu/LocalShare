@@ -1,5 +1,5 @@
 import net from 'node:net'
-import { createReadStream } from 'node:fs'
+import { createReadStream, type ReadStream } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { encodeFrame, FrameParser, type Message } from './protocol'
 import type { WalkEntry } from './tree'
@@ -38,10 +38,8 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
   })
 }
 
-function pipeFile(socket: net.Socket, absPath: string, onBytes: (n: number) => void): Promise<void> {
+function pipeFile(socket: net.Socket, stream: ReadStream, onBytes: (n: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    // 大块读取（1MB）减少 data 事件与背压 pause/resume 抖动，显著提升真实网络吞吐
-    const stream = createReadStream(absPath, { highWaterMark: 1024 * 1024 })
     stream.on('error', reject)
     socket.on('error', reject)
     stream.on('data', (chunk: Buffer | string) => {
@@ -58,6 +56,7 @@ export class Sender extends EventEmitter {
   private socket: net.Socket | null = null
   private parser = new FrameParser()
   private transferId: string | null = null
+  private currentStream: ReadStream | null = null // 当前文件读流（fail 时需销毁，防挂起）
 
   constructor(private readonly opts: { senderId: string; senderName: string }) {
     super()
@@ -137,10 +136,14 @@ export class Sender extends EventEmitter {
         const size = entry.size
         socket.write(encodeFrame({ type: 'FILE_HEADER', transferId, path: entry.relPath, size }))
         if (size > 0) {
-          await pipeFile(socket, entry.absPath, (n) => {
+          // 大块读取（1MB）减少 data 事件与背压 pause/resume 抖动，显著提升真实网络吞吐
+          const stream = createReadStream(entry.absPath, { highWaterMark: 1024 * 1024 })
+          this.currentStream = stream
+          await pipeFile(socket, stream, (n) => {
             sent += n
             emitProgress(entry.relPath, size)
           })
+          this.currentStream = null
         }
         socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: size }))
         emitProgress(entry.relPath, size, true)
@@ -187,6 +190,11 @@ export class Sender extends EventEmitter {
     if (!this.transferId && this.socket === null) return
     const id = this.transferId
     this.transferId = null
+    // 销毁当前读流：防止 socket 已毁后读流 pause 永无 drain → pipeFile 挂起
+    if (this.currentStream) {
+      this.currentStream.destroy(new Error('transfer aborted'))
+      this.currentStream = null
+    }
     this.socket?.destroy()
     this.socket = null
     this.emit('failed', { transferId: id, reason: err.message })

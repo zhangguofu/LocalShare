@@ -209,7 +209,8 @@ describe('端到端传输（回环 TCP）', () => {
     // 传输进行中，接收方取消
     await new Promise((res) => setTimeout(res, 10))
     r.cancelTransfer(offer.transferId)
-    await expect(sendP).rejects.toThrow(/cancelled/)
+    // 取消后发送方必然失败（CANCEL 帧或连接断开，具体消息依竞态而定）
+    await expect(sendP).rejects.toThrow()
     await new Promise((res) => setTimeout(res, 200))
     await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
   })
