@@ -22,10 +22,13 @@
         title="修改端口或设备名后服务会自动重启；端口须未被其他程序占用。"
       />
     </el-form>
-    <div class="version">版本 v{{ version }}</div>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <div class="footer-row">
+        <span class="version">版本 v{{ version }}</span>
+        <span class="spacer"></span>
+        <el-button @click="visible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -97,5 +100,7 @@ async function save(): Promise<void> {
 <style scoped>
 .dir-row { display: flex; gap: 8px; width: 100%; }
 .dir-row .el-input { flex: 1; }
-.version { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 12px; }
+.footer-row { display: flex; align-items: center; width: 100%; }
+.spacer { flex: 1; }
+.version { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>
