@@ -74,7 +74,9 @@ npm run release -- --arch=x64  # 指定架构（mac：x64|arm64|universal|both�
 仓库含 `.github/workflows/build.yml`，推送后自动执行：
 
 - **push 到 main / 手动触发**：跑 typecheck + 测试 + 打包，产物上传为 Artifact（Actions 页面可下载）
-- **打标签 `v1.2.3`**：跑 typecheck + 测试 + 打包，并发布到 **GitHub Release**（含 `.dmg` 与 `.exe`）
+- **打标签 `v1.2.3`**：跑 typecheck + 测试 + 打包，并发布到 **GitHub Release**（含 macOS x64 + arm64 两个 `.dmg` 与 Windows `.exe`）
+
+> 注：GitHub 已移除 Intel macOS runner，macOS 双架构（x64 + arm64）由 Apple Silicon runner 交叉打包生成。
 
 **正式发版流程**：
 

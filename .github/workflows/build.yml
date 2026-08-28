@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 = Intel(x64)；macos-latest = Apple Silicon(arm64)；windows-latest = x64
-        os: [macos-13, macos-latest, windows-latest]
+        # GitHub 已移除 Intel runner（macos-13 下线）：mac 在 arm64 runner 上交叉打 x64 + arm64
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write # 发布 Release 需要（tag 触发时）
@@ -58,7 +58,14 @@ jobs:
 
       - name: Build & package
         # tag 触发 → 发布到 Release；否则仅打包
-        run: npx electron-builder --publish "${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}"
+        # macOS：在 arm64 runner 上交叉打包 x64 + arm64 两个 dmg（GitHub 无 Intel runner）
+        run: |
+          PUBLISH="${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            npx electron-builder --mac --x64 --arm64 --publish "$PUBLISH"
+          else
+            npx electron-builder --publish "$PUBLISH"
+          fi
         env:
           # CI 无本机证书库：禁用自动发现；签名变量由上方条件步骤注入
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
