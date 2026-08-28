@@ -8,12 +8,10 @@ import {
   sanitizePath,
   HEADER_LENGTH,
   MAX_FRAME_LENGTH,
-  CANCEL_ACK_TIMEOUT_MS,
   type Message,
   type OfferMessage,
   type FileHeaderMessage,
-  type FileDoneMessage,
-  type CancelMessage
+  type FileDoneMessage
 } from './protocol'
 import { AtomicSink, detectConflicts } from '../storage'
 import { runPool } from './pool'
@@ -106,7 +104,7 @@ export class Receiver extends EventEmitter {
     return session.checkConflicts(dir)
   }
 
-  // 传输中取消（设计 5.3：任意一方可主动取消）：发 CANCEL 帧并断开，清理 .part
+  // 传输中取消（设计 5.3：任意一方可主动取消）：发 CANCEL 并断开，清理 .part
   cancelTransfer(transferId: string): void {
     const session = this.sessions.get(transferId)
     if (!session) return
@@ -123,7 +121,6 @@ class Session extends EventEmitter {
   private dirEntries: string[] = [] // OFFER 中的 type:'dir' 条目（sanitize 后的路径）
   private offerFiles: { type: 'file' | 'dir'; path: string }[] = [] // 完整清单（二次冲突检测用）
   private closed = false
-  private cancelling = false // 优雅取消等待 ACK 中
   private completed = false // 传输已正常完成（TRANSFER_DONE 处理过）
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
@@ -149,10 +146,11 @@ class Session extends EventEmitter {
       }
     })
     socket.on('error', (err) => this.fail(err))
-    // 对端关闭写端（FIN：取消或正常结束）：若传输未完成则立即失败，不再等 30s 无数据超时
+    // 对端 FIN（优雅关闭 = 取消）：若传输未完成则立即失败，不再等 30s 无数据超时
+    // 语义：FIN → "对方已取消"；RST/超时 → "连接断开"
     socket.on('end', () => {
       if (!this.closed && !this.completed && this.transferId !== 'pending') {
-        this.fail(new Error('对端已取消或断开连接'))
+        this.fail(new Error('对端已取消传输'))
       }
     })
     socket.on('close', () => {
@@ -258,10 +256,7 @@ class Session extends EventEmitter {
         await this.onTransferDone(msg)
         break
       case 'CANCEL':
-        this.handlePeerCancel(msg)
-        break
-      case 'CANCEL_ACK':
-        this.emit('cancel-ack')
+        this.fail(new Error('对方已取消传输'))
         break
       case 'ERROR':
         this.fail(new Error(`${msg.code}: ${msg.message}`))
@@ -303,6 +298,35 @@ class Session extends EventEmitter {
     this.startIdleCheck() // 接受后启用无数据超时：30 秒无数据则判定挂死
   }
 
+  // 检查指定目录下是否存在与传输清单重名的文件/目录
+  async checkConflicts(dir: string): Promise<boolean> {
+    return detectConflicts(this.offerFiles, dir)
+  }
+
+  reject(reason: string): void {
+    if (!this.closed) this.socket.write(encodeFrame({ type: 'REJECT', transferId: this.transferId, reason }))
+    this.socket.end()
+    this.cleanup()
+  }
+
+  // 传输中取消：发 CANCEL（尽力）→ FIN（对端可靠感知为"取消"）→ 本地清理 .part
+  // 对端语义：收到 FIN（end 事件）视为"对方已取消"，RST/超时视为"连接断开"
+  cancel(reason: string): void {
+    if (this.closed) return
+    try {
+      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: this.transferId, reason }))
+    } catch {
+      // 对端可能已断开，忽略
+    }
+    this.socket.end() // FIN：TCP 层可靠送达
+    this.cleanup() // 本地 .part 立即清理
+  }
+
+  // 立即断开连接（Receiver.stop 调用），触发 close 清理
+  dispose(): void {
+    if (!this.closed) this.socket.destroy()
+  }
+
   // 无数据超时：接受后启动周期检查，最近一次收数据超过阈值即失败
   private startIdleCheck(): void {
     if (this.idleTimer) return
@@ -315,73 +339,8 @@ class Session extends EventEmitter {
     }, interval)
   }
 
-  // 检查指定目录下是否存在与传输清单重名的文件/目录
-  async checkConflicts(dir: string): Promise<boolean> {
-    return detectConflicts(this.offerFiles, dir)
-  }
-
-  reject(reason: string): void {
-    if (!this.closed) this.socket.write(encodeFrame({ type: 'REJECT', transferId: this.transferId, reason }))
-    this.socket.end()
-    this.cleanup()
-  }
-
-  // 传输中取消：发 CANCEL 帧（flush）后断开，清理 .part
-  // 优雅取消：本地立即清理 .part，等待对方 CANCEL_ACK（1.5s）后优雅关闭，超时则强制断开
-  cancel(reason: string): void {
-    if (this.closed || this.cancelling) return
-    this.cancelling = true
-    const id = this.transferId
-    try {
-      this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
-    } catch {
-      // 对端可能已断开
-    }
-    this.cleanup() // 本地 .part 立即清理
-    const timer = setTimeout(() => this.finishCancel(id, 'timeout'), CANCEL_ACK_TIMEOUT_MS)
-    this.once('cancel-ack', () => {
-      clearTimeout(timer)
-      this.finishCancel(id, 'ack')
-    })
-  }
-
-  private finishCancel(_id: string, mode: 'ack' | 'timeout'): void {
-    if (this.closed) return
-    this.cancelling = false
-    this.closed = true
-    if (mode === 'ack') this.socket.end() // 优雅：对端已确认取消
-    else this.socket.destroy() // 超时：强制断开
-    this.cleanup()
-    this.emit('closed')
-  }
-
-  // 对端取消：回 CANCEL_ACK 后优雅收尾（不 destroy，保证 ACK flush）
-  private handlePeerCancel(msg: CancelMessage): void {
-    if (this.closed) return
-    try {
-      this.socket.write(encodeFrame({ type: 'CANCEL_ACK', transferId: msg.transferId }))
-    } catch {
-      // 对端可能已断开
-    }
-    this.closed = true
-    this.socket.end()
-    this.cleanup()
-    this.ev.onError(this.transferId, new Error('cancelled by peer: ' + msg.reason))
-    this.emit('closed')
-  }
-
-  // 立即断开连接（Receiver.stop 调用），触发 close 清理
-  dispose(): void {
-    if (!this.closed) this.socket.destroy()
-  }
-
-  private async onFileDone(msg: FileDoneMessage): Promise<void> {
-    // 同步路径已在 onData 处理（onFileDoneSync）；此处仅兜底（不应触发）
-    this.onFileDoneSync(msg)
-  }
-
-  // 同步校验文件完成：current 必须匹配、字节数一致；commit 异步入链
-  private onFileDoneSync(msg: FileDoneMessage): void {
+  private async onFileDoneSync(msg: FileDoneMessage): Promise<void> {
+    // 同步校验文件完成：current 必须匹配、字节数一致；commit 异步入链
     if (!this.current || this.current.header.path !== msg.path) {
       throw new Error('protocol error: FILE_DONE without matching file')
     }
@@ -400,16 +359,6 @@ class Session extends EventEmitter {
     this.ev.onProgress({ transferId: this.transferId, fileName: msg.path, totalBytes: this.receivedBytes })
   }
 
-  // 发送 ERROR 帧（本地资源错误时；协议违规/对端主动行为不发送）
-  private sendError(code: string, message: string): void {
-    if (this.closed || this.transferId === 'pending') return
-    try {
-      this.socket.write(encodeFrame({ type: 'ERROR', transferId: this.transferId, code, message }))
-    } catch {
-      // 对端可能已断开，忽略
-    }
-  }
-
   private async onTransferDone(_msg: Message): Promise<void> {
     if (this.current) {
       throw new Error('protocol error: TRANSFER_DONE during file transfer')
@@ -419,6 +368,16 @@ class Session extends EventEmitter {
     this.ev.onComplete(this.transferId, this.targetDir ?? this.defaultDir)
     this.socket.end()
     this.cleanup()
+  }
+
+  // 发送 ERROR 帧（本地资源错误时；协议违规/对端主动行为不发送）
+  private sendError(code: string, message: string): void {
+    if (this.closed || this.transferId === 'pending') return
+    try {
+      this.socket.write(encodeFrame({ type: 'ERROR', transferId: this.transferId, code, message }))
+    } catch {
+      // 对端可能已断开，忽略
+    }
   }
 
   private cleanup(): void {

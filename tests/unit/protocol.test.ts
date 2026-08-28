@@ -20,11 +20,6 @@ describe('encodeFrame / decodeFrame', () => {
     expect(decodeFrame(frame)).toEqual(msg)
   })
 
-  it('往返编解码 CANCEL_ACK', () => {
-    const msg = { type: 'CANCEL_ACK' as const, transferId: 'x-1' }
-    expect(decodeFrame(encodeFrame(msg))).toEqual(msg)
-  })
-
   it('magic 错误抛出', () => {
     const bad = Buffer.from('XXXX')
     expect(() => decodeFrame(Buffer.concat([bad, Buffer.from('1234')]))).toThrow(/magic/)

@@ -214,7 +214,7 @@ describe('端到端传输（回环 TCP）', () => {
     const { error } = await new Promise<{ transferId: string; error: Error }>((res) =>
       r.once('transferError', (e) => res(e))
     )
-    expect(error.message).toMatch(/取消|断开/)
+    expect(error.message).toMatch(/取消/)
     await new Promise((res) => setTimeout(res, 200)) // 等异步 .part 清理完成
     await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
   })
@@ -231,8 +231,10 @@ describe('端到端传输（回环 TCP）', () => {
     // 传输进行中，接收方取消
     await new Promise((res) => setTimeout(res, 10))
     r.cancelTransfer(offer.transferId)
-    // 取消后发送方必然失败（CANCEL 帧或连接断开，具体消息依竞态而定）
+    // 发送方 UI 收到的 failed 事件应为对方已取消传输；sendP 仅断言失败（底层错误消息无关）
+    const failedP = new Promise<string>((res) => sender.once('failed', (f: { reason: string }) => res(f.reason)))
     await expect(sendP).rejects.toThrow()
+    expect(await failedP).toMatch(/取消/)
     await new Promise((res) => setTimeout(res, 200))
     await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
   })

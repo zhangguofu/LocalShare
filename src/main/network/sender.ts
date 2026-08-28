@@ -1,7 +1,7 @@
 import net from 'node:net'
 import { createReadStream, type ReadStream } from 'node:fs'
 import { EventEmitter } from 'node:events'
-import { encodeFrame, FrameParser, CANCEL_ACK_TIMEOUT_MS, type Message } from './protocol'
+import { encodeFrame, FrameParser, type Message } from './protocol'
 import type { WalkEntry } from './tree'
 
 export interface TransferProgress {
@@ -57,7 +57,6 @@ export class Sender extends EventEmitter {
   private parser = new FrameParser()
   private transferId: string | null = null
   private currentStream: ReadStream | null = null // 当前文件读流（fail 时需销毁，防挂起）
-  private cancelling = false // 优雅取消等待 ACK 中
 
   constructor(private readonly opts: { senderId: string; senderName: string }) {
     super()
@@ -162,64 +161,24 @@ export class Sender extends EventEmitter {
     }
   }
 
-  // 优雅取消：发 CANCEL → 立即停止数据流 + UI 即时反馈 → 等对方 CANCEL_ACK（3s）→ 优雅关闭或强制断开
+  // 取消：停数据流 → 尽力发 CANCEL（对端若在 CTRL 模式可识别为"取消"；被数据吞掉由 FIN 兜底）→ FIN（对端可靠感知）
+  // 对端语义：收到 FIN（end 事件）视为"对方已取消"，RST/超时视为"连接断开"
   cancel(reason = 'user_cancelled'): void {
-    if (!this.socket || !this.transferId || this.cancelling) return
-    this.cancelling = true
+    if (!this.socket || !this.transferId) return
     const id = this.transferId
+    this.transferId = null
+    if (this.currentStream) {
+      this.currentStream.destroy(new Error('transfer aborted'))
+      this.currentStream = null
+    }
     try {
       this.socket.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
     } catch {
-      // 对端可能已断开，直接进入收尾
+      // 对端可能已断开，忽略
     }
-    // 立即停止数据流：读流销毁 → pipeFile reject → start 收尾（fail 在 cancelling 时让位给 finishCancel）
-    if (this.currentStream) {
-      this.currentStream.destroy(new Error('transfer aborted'))
-      this.currentStream = null
-    }
-    this.emit('failed', { transferId: id, reason: 'cancelled' }) // UI 即时反馈，不等 ACK
-    const timer = setTimeout(() => this.finishCancel(id, 'timeout'), CANCEL_ACK_TIMEOUT_MS)
-    this.once('cancel-ack', () => {
-      clearTimeout(timer)
-      this.finishCancel(id, 'ack')
-    })
-  }
-
-  private finishCancel(id: string, mode: 'ack' | 'timeout'): void {
-    this.cancelling = false
-    this.transferId = null
-    if (this.currentStream) {
-      this.currentStream.destroy(new Error('transfer aborted'))
-      this.currentStream = null
-    }
-    const sock = this.socket
+    this.emit('failed', { transferId: id, reason: 'cancelled' })
+    this.socket.end() // FIN：TCP 层可靠送达
     this.socket = null
-    if (sock) {
-      if (mode === 'ack') sock.end() // 优雅：对端已确认取消
-      else sock.destroy() // 超时：对方无响应，强制断开
-    }
-  }
-
-  // 对端取消时回 CANCEL_ACK 后优雅收尾（不 destroy，保证 ACK flush）
-  private gracefulFail(err: Error, sendAck: boolean): void {
-    if (!this.transferId && this.socket === null) return
-    const id = this.transferId
-    this.transferId = null
-    if (sendAck && this.socket && id) {
-      try {
-        this.socket.write(encodeFrame({ type: 'CANCEL_ACK', transferId: id }))
-      } catch {
-        // 对端已断开，忽略
-      }
-    }
-    if (this.currentStream) {
-      this.currentStream.destroy(new Error('transfer aborted'))
-      this.currentStream = null
-    }
-    const sock = this.socket
-    this.socket = null
-    if (sock) sock.end() // flush ACK 后 FIN
-    this.emit('failed', { transferId: id, reason: err.message })
   }
 
   private onMessage(msg: Message): void {
@@ -229,9 +188,7 @@ export class Sender extends EventEmitter {
     } else if (msg.type === 'REJECT') {
       this.emit('offer-result', { ok: false, reason: msg.reason })
     } else if (msg.type === 'CANCEL') {
-      this.gracefulFail(new Error('cancelled by peer: ' + msg.reason), true)
-    } else if (msg.type === 'CANCEL_ACK') {
-      this.emit('cancel-ack')
+      this.fail(new Error('对方已取消传输'))
     } else if (msg.type === 'ERROR') {
       this.fail(new Error(`${msg.code}: ${msg.message}`))
     } else if (msg.type === 'TRANSFER_ACK') {
@@ -241,7 +198,6 @@ export class Sender extends EventEmitter {
 
   private fail(err: Error): void {
     if (!this.transferId && this.socket === null) return
-    if (this.cancelling) return // 优雅取消进行中：由 finishCancel 收尾（保持连接等 ACK）
     const id = this.transferId
     this.transferId = null
     // 销毁当前读流：防止 socket 已毁后读流 pause 永无 drain → pipeFile 挂起

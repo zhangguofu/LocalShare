@@ -231,13 +231,7 @@
 { "type": "CANCEL", "transferId": "uuid", "reason": "user_cancelled" }
 ```
 
-**CANCEL_ACK（取消接收方 → 取消发起方）**
-
-```json
-{ "type": "CANCEL_ACK", "transferId": "uuid" }
-```
-
-- **优雅取消**：发起方发 `CANCEL` 后保持连接，等待对方回 `CANCEL_ACK`（3 秒超时）；收到 ACK 则优雅关闭，超时则强制断开。对方收到 `CANCEL` 后先回 `CANCEL_ACK` 再做本地清理，保证 ACK 送达（TCP flush 后 FIN）。
+**取消语义（基于 TCP FIN）**：取消方停止数据流后发 `CANCEL`（尽力，对端若在 CTRL 模式可识别）并 `socket.end()`（FIN）。对端可靠感知：收到 FIN（`end` 事件）且传输未完成 → 判定「对方已取消」；收到 RST / 30 秒无数据超时 → 判定「连接断开」。传输中取消时 `CANCEL` 帧可能被接收方 DATA 模式吞掉，由 FIN 兜底——FIN 双向握手本身就是取消确认，无需应用层 ACK。
 
 **ERROR（任意一方，致命错误）**
 
