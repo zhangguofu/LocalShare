@@ -25,7 +25,6 @@
     <template #footer>
       <div class="footer-row">
         <span class="version">版本 v{{ version }}</span>
-        <el-button type="danger" text @click="quitApp">退出应用</el-button>
         <span class="spacer"></span>
         <el-button @click="visible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
@@ -36,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { AppConfig } from '../../../main/config'
 
 const visible = defineModel<boolean>({ required: true })
@@ -95,19 +94,6 @@ async function save(): Promise<void> {
   } finally {
     saving.value = false
   }
-}
-
-async function quitApp(): Promise<void> {
-  try {
-    await ElMessageBox.confirm('确定退出 LocalShare 吗？退出后将无法接收文件。', '退出应用', {
-      confirmButtonText: '退出',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-  } catch {
-    return // 用户取消
-  }
-  await window.api.quit()
 }
 </script>
 

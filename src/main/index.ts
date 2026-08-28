@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, Notification, Menu, Tray, nativeImage, type NativeImage } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import dgram from 'node:dgram'
@@ -13,10 +13,11 @@ import type { OfferSummary } from './network/receiver'
 import type { TransferTarget } from '../preload'
 
 let win: BrowserWindow | null = null
+let tray: Tray | null = null // Windows 系统托盘（关窗后驻留，右键退出）
 let discovery: DiscoveryService | null = null
 let receiver: Receiver | null = null
 const senders = new Map<string, Sender>()
-let isQuitting = false // Cmd+Q / Dock 退出时置位，放行真正的窗口关闭
+let isQuitting = false // 真正退出时置位，放行窗口关闭
 
 // 本机多实例验证/调试：LOCALSHARE_USER_DATA 隔离配置（deviceId/端口/设备名独立）
 if (process.env.LOCALSHARE_USER_DATA) {
@@ -38,12 +39,15 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
-  // 关窗 = 最小化（双平台统一）：窗口收进任务栏/Dock，应用驻留后台继续接收；
-  // 彻底退出：Cmd+Q（macOS）或设置页「退出应用」（isQuitting 放行）
+  // 关窗行为（业界惯例）：macOS 最小化到 Dock；Windows 隐藏到系统托盘。
+  // 彻底退出：macOS Cmd+Q / 应用菜单；Windows 托盘右键「退出」（isQuitting 放行）
   win.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault()
+    if (isQuitting) return
+    e.preventDefault()
+    if (process.platform === 'darwin') {
       win?.minimize()
+    } else {
+      win?.hide()
     }
   })
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -142,7 +146,6 @@ function startServices(): void {
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('app:version', () => app.getVersion())
-  ipcMain.handle('app:quit', () => app.quit())
   ipcMain.handle('config:get', () => getConfig())
   ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
     // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）
@@ -248,9 +251,54 @@ function registerIpc(): void {
   })
 }
 
+// 生成托盘图标（16×16 蓝色方块；项目暂无自定义图标，用程序生成）
+function createTrayIcon(): NativeImage {
+  const size = 16
+  const buf = Buffer.alloc(size * size * 4)
+  for (let i = 0; i < size * size; i++) {
+    buf[i * 4] = 0x40
+    buf[i * 4 + 1] = 0x8f
+    buf[i * 4 + 2] = 0xf4
+    buf[i * 4 + 3] = 0xff
+  }
+  return nativeImage.createFromBitmap(buf, { width: size, height: size })
+}
+
+// macOS 应用菜单：退出走系统菜单（Cmd+Q），符合平台惯例
+function setupAppMenu(): void {
+  if (process.platform !== 'darwin') return
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { label: 'LocalShare', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
+      { role: 'editMenu' },
+      { role: 'windowMenu' }
+    ])
+  )
+}
+
+// Windows 系统托盘：关窗后驻留，点击恢复窗口，右键菜单退出
+function setupTray(): void {
+  if (process.platform === 'darwin' || tray) return
+  tray = new Tray(createTrayIcon())
+  tray.setToolTip('LocalShare')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '打开 LocalShare', click: () => { win?.show(); win?.focus() } },
+      { type: 'separator' },
+      { label: '退出', click: () => app.quit() }
+    ])
+  )
+  tray.on('click', () => {
+    win?.show()
+    win?.focus()
+  })
+}
+
 app.whenReady().then(() => {
   registerIpc()
   createWindow()
+  setupAppMenu()
+  setupTray()
   startServices()
   app.on('activate', () => {
     // 点击 Dock（macOS）：从最小化恢复窗口；窗口被销毁（极少见）则重建
@@ -269,6 +317,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
   discovery?.stop()
   receiver?.stop()
 })
