@@ -69,6 +69,25 @@ npm run release -- --arch=x64  # 指定架构（mac：x64|arm64|universal|both�
 
 脚本逻辑：读 `package.json` → 递增版本尾号（或指定）→ 写回 → `build` → 按当前平台打包（darwin → `.dmg`，win32 → `.exe`）。
 
+## GitHub Actions 自动构建发布
+
+仓库含 `.github/workflows/build.yml`，推送后自动执行：
+
+- **push 到 main / 手动触发**：跑 typecheck + 测试 + 打包，产物上传为 Artifact（Actions 页面可下载）
+- **打标签 `v1.2.3`**：跑 typecheck + 测试 + 打包，并发布到 **GitHub Release**（含 `.dmg` 与 `.exe`）
+
+**正式发版流程**：
+
+```bash
+npm run release          # 本地：版本号 +1 并验证本机打包（可选，也可直接手动改 version）
+git add package.json && git commit -m "release: v1.2.3"
+git tag v1.2.3 && git push origin main --tags   # 推送 tag 触发 CI 发布
+```
+
+**代码签名**（可选，正式分发建议）：将 macOS（`.p12`）与 Windows 代码签名证书 Base64 后存入 GitHub Secrets：`MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` / `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`。未配置时 CI 自动跳过签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`）。
+
+**注意**：CI 在海外 runner 执行，`npm install` 走仓库 `.npmrc` 的 npmmirror 镜像；若海外链路偏慢，可在 workflow 中覆盖 `registry` 为官方源（保留 `electron_mirror`）。
+
 ## 目录结构
 
 ```
