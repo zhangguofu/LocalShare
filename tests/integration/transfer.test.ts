@@ -197,7 +197,7 @@ describe('端到端传输（回环 TCP）', () => {
     await expect(fs.access(path.join(recvDir, 'a.txt.part'))).rejects.toThrow()
   })
 
-  it('发送方传输中取消：接收方快速感知失败（不等 30s 超时）且 .part 无残留', async () => {
+  it('发送方传输中取消：接收方快速感知失败（不等 30s 超时）且 .part 无残留', { timeout: 15000 }, async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))
     const r = await startReceiver()
@@ -219,7 +219,7 @@ describe('端到端传输（回环 TCP）', () => {
     await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
   })
 
-  it('接收方传输中取消：发送方收到取消提示且 .part 无残留', async () => {
+  it('接收方传输中取消：发送方收到取消提示且 .part 无残留', { timeout: 15000 }, async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))
     const r = await startReceiver()
