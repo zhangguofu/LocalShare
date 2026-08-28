@@ -7,109 +7,53 @@
 ## 核心特性
 
 - **对等模式（P2P）**：无中心服务器，两台设备直接互传
-- **自动发现**：UDP 广播发现同子网设备，也可手动输入 `IP:端口` 直连兜底
-- **文件夹完整传输**：逐文件流式传输，保留目录结构（含空目录、中文文件名、零字节文件）
-- **接收方确认**：收到传输请求弹确认框（发送者/内容/大小），接受后才开始传输
-- **冲突保护**：目标位置存在同名文件时明确提示，覆盖必须经用户确认（默认目录与新选目录均检测）
-- **实时进度**：传输列表显示百分比（两位小数）与已传/总字节
-- **原子落盘**：`.part` 临时文件 + rename，传输中断自动清理，不产生半成品
-- **可配置**：设置页可修改设备名、保存目录、UDP/TCP 端口（保存前自动检测端口占用）
+- **自动发现**：同子网设备自动出现在列表，也可手动输入 `IP:端口` 直连兜底
+- **文件夹完整传输**：保留目录结构（含空目录、中文文件名、零字节文件）
+- **接收方确认**：收到传输请求先确认（发送者/内容/大小），接受后才开始传输
+- **冲突保护**：目标位置存在同名文件时明确提示，覆盖必须经你确认
+- **实时进度**：传输列表显示百分比与已传/总字节
+- **中断清理**：传输中断自动清理临时文件，不产生半成品
+- **可配置**：设置页可修改设备名、保存目录、端口
 
-## 技术栈
+## 获取与安装
 
-- Electron + Vue 3 + TypeScript + Vite + Pinia + Element Plus
-- **网络层从零自研**（仅 Node 内置 `dgram`/`net`）：UDP 发现协议 + TCP 传输协议（帧格式/状态机均为自研，见设计文档）
-- 国内镜像固化（`.npmrc` → npmmirror），依赖安装开箱即用
+到 **GitHub Releases 页** 下载对应平台的安装包：
 
-## 快速开始
+| 平台 | 安装包 |
+|---|---|
+| macOS（Apple Silicon） | `LocalShare-<版本>-arm64.dmg` |
+| macOS（Intel） | `LocalShare-<版本>-x64.dmg` |
+| Windows（64 位） | `LocalShare-<版本>-x64.exe` |
 
-环境搭建（Node.js 20/22 等）与打包详见：
+**安装说明**（当前版本未签名，系统会提示"未知开发者"）：
 
-- **[Windows 环境搭建与打包](docs/BUILD-WINDOWS.md)**
-- **[macOS 环境搭建与打包](docs/BUILD-MACOS.md)**
-
-开发运行：
-
-```bash
-npm install
-npm run dev        # 开发模式
-npm test           # 单元 + 集成测试（UDP/TCP 回环）
-npm run build:mac  # 或 build:win 打包
-```
+- **macOS**：首次打开若被拦截 → 右键点击应用 → 打开 → 确认；或终端执行 `xattr -cr /Applications/LocalShare.app`
+- **Windows**：SmartScreen 提示"未知发布者" → 点击"更多信息" → "仍要运行"
 
 ## 使用方式
 
-1. 两台设备（Windows/macOS）同一局域网运行应用，**12 秒内**互相出现在设备列表
+1. 两台设备（Windows/macOS）连接同一局域网，运行应用，**约 12 秒内**互相出现在设备列表
 2. 选择目标设备 → 拖拽文件/文件夹到中间区域（或点击选择）→ 发起传输
 3. 接收方弹确认框：**接受**（保存到默认目录）/ **选择其他位置** / **拒绝**；存在同名内容时需显式**接受并覆盖**
 4. 传输列表实时显示进度；接收完成有系统通知，点击直达保存目录
 
-发现失效时（跨 VLAN / AP 隔离 / 防火墙拦截广播）：左侧输入 `对方IP:端口`（默认 `45556`）手动直连。
+**发现失效时**（跨 VLAN / 无线隔离 / 防火墙拦截广播）：左侧输入 `对方IP:端口`（默认 `45556`）手动直连。
 
-## 版本号管理
+**接收位置**：默认保存到 `~/LocalShare`（设置页可修改）；每次接收都可"选择其他位置"。
 
-版本号**唯一来源是 `package.json` 的 `version` 字段**，改一处即全局生效：
+## 常见问题
 
-- 安装包文件名（如 `LocalShare-0.1.0-x64.dmg`，带架构标识：`x64` / `arm64` / `universal`；Windows 为 `-x64.exe`）
-- 界面展示（设置对话框底部「版本 vX.Y.Z」）
-- 设备列表对端版本（HELLO 广播携带，`app.getVersion()` 读取）
+- **两台设备看不到对方？** 确认同一子网、应用在运行；macOS 检查「系统设置 → 隐私与安全性 → 本地网络」已允许；Windows 首次运行防火墙弹窗需勾选"专用网络"。
+- **改了 UDP 端口后设备消失了？** UDP 端口是所有设备共用的约定，修改后其他设备无法发现本机（除非对方同样修改）。TCP 端口每台机器独立，可自由修改。
+- **关窗后程序还在？** macOS 惯例：关窗 = 驻留后台（可继续接收），`Cmd+Q` 或 Dock 右键才退出。
+- **传输慢？** 优先确认两端为有线千兆连接（WiFi 会明显降速）。
 
-**推荐用发版脚本**（自动递增版本号并打包当前平台）：
-
-```bash
-npm run release                # patch +1（0.1.0 → 0.1.1），macOS 打 dmg / Windows 打 exe
-npm run release -- --minor     # minor +1
-npm run release -- --major     # major +1
-npm run release -- --version=1.2.3   # 指定版本
-npm run release -- --sign      # macOS 显式启用代码签名（默认不签名，需本机开发者证书）
-npm run release -- --arch=x64  # 指定架构（mac：x64|arm64|universal|both；win：x64|arm64）
-```
-
-**架构说明（macOS）**：默认按**本机芯片**打包（Intel → x64，Apple Silicon → arm64）；`--arch=universal` 打通用二进制（同时兼容两种芯片），`--arch=both` 分别产出 x64 与 arm64 两个安装包。
-
-脚本逻辑：读 `package.json` → 递增版本尾号（或指定）→ 写回 → `build` → 按当前平台打包（darwin → `.dmg`，win32 → `.exe`）。
-
-## GitHub Actions 自动构建发布
-
-仓库含 `.github/workflows/build.yml`，推送后自动执行：
-
-- **push 到 main / 手动触发**：跑 typecheck + 测试 + 打包，产物上传为 Artifact（Actions 页面可下载）
-- **打标签 `v1.2.3`**：跑 typecheck + 测试 + 打包，并发布到 **GitHub Release**（含 macOS x64 + arm64 两个 `.dmg` 与 Windows `.exe`）
-
-> 注：GitHub 已移除 Intel macOS runner，macOS 双架构（x64 + arm64）由 Apple Silicon runner 交叉打包生成。
-
-**正式发版流程**：
-
-```bash
-npm run release          # 本地：版本号 +1 并验证本机打包（可选，也可直接手动改 version）
-git add package.json && git commit -m "release: v1.2.3"
-git tag v1.2.3 && git push origin main --tags   # 推送 tag 触发 CI 发布
-```
-
-**代码签名**（可选，正式分发建议）：将 macOS（`.p12`）与 Windows 代码签名证书 Base64 后存入 GitHub Secrets：`MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` / `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`。未配置时 CI 自动跳过签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`）。
-
-**注意**：CI 在海外 runner 执行，`npm install` 走仓库 `.npmrc` 的 npmmirror 镜像；若海外链路偏慢，可在 workflow 中覆盖 `registry` 为官方源（保留 `electron_mirror`）。
-
-## 目录结构
-
-```
-src/
-  main/            # 主进程：网络层（protocol/tree/discovery/sender/receiver）、存储、配置、IPC
-  preload/         # contextBridge 窄 API
-  renderer/        # Vue3 UI：设备列表、拖放区、传输队列、确认对话框、设置
-tests/             # 单元 + 集成测试（真实 UDP/TCP 回环）
-scripts/           # 双节点互传验证脚本（verify-transfer.mts）
-docs/              # 设计文档、环境搭建指南
-```
-
-## 文档索引
-
-- [设计文档](docs/2026-08-27-localshare-design.md)——需求基线、架构、协议规格（帧格式/消息/状态机）、测试策略
-- [Windows 构建指南](docs/BUILD-WINDOWS.md) / [macOS 构建指南](docs/BUILD-MACOS.md)
-
-## 已知限制（当前版本）
+## 已知限制
 
 - 断点续传：未实现（传输中断需重传）
 - 传输明文，无加密（局域网可信模型；接收方确认兜底）
 - 单队列传输（同一时间一个传输）
-- 目录"镜像删除"不做（覆盖时保留对方目录中未涉及的文件）
+
+---
+
+开发与维护（构建、发版、CI、协议规格）见 **[开发文档](docs/DEVELOPMENT.md)**。
