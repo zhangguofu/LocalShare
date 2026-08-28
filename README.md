@@ -54,7 +54,17 @@ npm run build:mac  # 或 build:win 打包
 - 界面展示（设置对话框底部「版本 vX.Y.Z」）
 - 设备列表对端版本（HELLO 广播携带，`app.getVersion()` 读取）
 
-发版流程：修改 `package.json` 的 `version` → `npm run build:mac` / `build:win` → 产物文件名与界面版本自动跟随。
+**推荐用发版脚本**（自动递增版本号并打包当前平台）：
+
+```bash
+npm run release                # patch +1（0.1.0 → 0.1.1），macOS 打 dmg / Windows 打 exe
+npm run release -- --minor     # minor +1
+npm run release -- --major     # major +1
+npm run release -- --version=1.2.3   # 指定版本
+npm run release -- --no-sign   # macOS 无证书/沙箱环境跳过签名
+```
+
+脚本逻辑：读 `package.json` → 递增版本尾号（或指定）→ 写回 → `build` → 按当前平台打包（darwin → `.dmg`，win32 → `.exe`）。
 
 ## 目录结构
 

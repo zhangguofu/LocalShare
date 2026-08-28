@@ -1,6 +1,6 @@
 {
   "name": "localshare",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LAN file and folder sharing between Windows and macOS",
   "main": "out/main/index.js",
   "author": "LocalShare",
@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "electron-vite build",
+    "release": "node scripts/release.mjs",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:win": "electron-vite build && electron-builder --win"
   },
