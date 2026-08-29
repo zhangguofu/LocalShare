@@ -73,6 +73,7 @@ import { ElMessage } from 'element-plus'
 import { Search as SearchIcon } from '@element-plus/icons-vue'
 import { useDeviceStore } from '../stores/device'
 import type { DeviceInfo } from '../../../main/network/deviceTable'
+import { platformOf, platformLabel } from '../utils/platform'
 
 const deviceStore = useDeviceStore()
 const manualIp = ref('')
@@ -86,16 +87,6 @@ const filtered = computed(() => {
     (d) => d.name.toLowerCase().includes(kw) || d.host.toLowerCase().includes(kw)
   )
 })
-
-function platformOf(d: DeviceInfo): 'win' | 'mac' | 'linux' {
-  const p = d.platform.toLowerCase()
-  if (p.includes('win')) return 'win'
-  if (p.includes('darwin')) return 'mac'
-  return 'linux'
-}
-function platformLabel(d: DeviceInfo): string {
-  return { win: 'Win', mac: 'Mac', linux: 'Linux' }[platformOf(d)]
-}
 
 const manualTarget = computed(() => {
   const t = deviceStore.target
