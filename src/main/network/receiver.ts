@@ -157,6 +157,7 @@ class Session extends EventEmitter {
   private writeIdle: (() => void) | null = null // 队列空时挂起等待的唤醒信号
   private netPaused = false // 水位背压状态（socket 是否处于 pause）
   private keepaliveTimer: NodeJS.Timeout | null = null // 水位 pause 期间的心跳（防发送方 idle 超时误判）
+  private recvProgressTimer: NodeJS.Timeout | null = null // 接收进度回传（100ms，发送方真实进度源）
 
   constructor(
     private readonly socket: net.Socket,
@@ -389,6 +390,30 @@ class Session extends EventEmitter {
     }
   }
 
+  // 接收进度回传：传输期间每 100ms 发 RECV_PROGRESS（携带累计已收字节）。
+  // 与本地 UI 的 progress 事件（50ms 节流）互不影响：这是发给对端的帧。
+  private startRecvProgress(): void {
+    if (this.recvProgressTimer) return
+    this.recvProgressTimer = setInterval(() => {
+      if (this.closed || this.completed) {
+        this.stopRecvProgress()
+        return
+      }
+      try {
+        this.socket.write(encodeFrame({ type: 'RECV_PROGRESS', transferId: this.transferId, bytes: this.receivedBytes }))
+      } catch {
+        // 对端可能已断开，忽略
+      }
+    }, 100)
+  }
+
+  private stopRecvProgress(): void {
+    if (this.recvProgressTimer) {
+      clearInterval(this.recvProgressTimer)
+      this.recvProgressTimer = null
+    }
+  }
+
   private async onMessage(msg: Message): Promise<void> {
     switch (msg.type) {
       case 'OFFER':
@@ -440,6 +465,7 @@ class Session extends EventEmitter {
     if (!this.closed) this.socket.write(encodeFrame({ type: 'ACCEPT', transferId: this.transferId }))
     this.startIdleCheck() // 接受后启用无数据超时：30 秒无数据则判定挂死
     this.startKeepalive() // 传输全程心跳：防发送方存活检测在背压/排空静默期误杀
+    this.startRecvProgress() // 每 100ms 回发已收字节：发送方据此显示真实进度（而非本地 sent）
   }
 
   // 检查指定目录下是否存在与传输清单重名的文件/目录
@@ -552,6 +578,7 @@ class Session extends EventEmitter {
       this.idleTimer = null
     }
     this.stopKeepalive()
+    this.stopRecvProgress()
     // 方案 2：清空写盘队列，abort 所有未落盘 sink（data 项与 current 去重）
     const sinks = new Set<AtomicSink>()
     for (const item of this.writeQueue) {

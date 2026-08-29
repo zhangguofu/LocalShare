@@ -115,6 +115,10 @@ export class Sender extends EventEmitter {
   // 活着 = 收到对端任何帧（KEEPALIVE/ACK…）或写缓冲推进（write 全入/drain，对端在收）
   private lastAliveAt = 0
   private aliveTimer: NodeJS.Timeout | null = null
+  // 真实进度源：对端 RECV_PROGRESS 帧报告的已收字节。优于本地 sent（sent 含
+  // 已入本机发送缓冲但未经网络确认的部分，读流脉冲导致台阶状）。旧版对端不回发 → 回退 sent。
+  private peerBytes = 0
+  private transferStartedAt = 0
 
   constructor(private readonly opts: { senderId: string; senderName: string }) {
     super()
@@ -178,21 +182,26 @@ export class Sender extends EventEmitter {
       if (!result.ok) throw new Error(result.reason ?? 'rejected')
 
       this.lastAliveAt = Date.now() // 进入传输阶段重置（OFFER 等待期间可能久候）
+      this.transferStartedAt = Date.now()
+      this.peerBytes = 0
 
       let sent = 0
       // 当前文件名/大小（定时上报用；读流事件只更新它们，不再直接触发上报）
       let curName = ''
       let curSize = 0
-      // 进度上报：定时器驱动（100ms 匀速），与读流 pause/drain 脉冲解耦。
-      // 原事件驱动下：本地读远快于网络 → 冲一批停一批等 drain → 进度呈脉冲式跳动（实测发送方比接收方“慢”）。
-      // 定时器读当前 sent 快照，读流静默期也有上报；接收方不受影响（网络到达被 TCP 平滑，天然连续）。
+      // 进度上报：定时器驱动（100ms 匀速）+ 真实进度源优先（方案 A）：
+      // 新版对端每 100ms 回发 RECV_PROGRESS（已收字节，TCP 平滑后连续）→ 显示它；
+      // 旧版对端不回发（启动 2s 后仍为 0）→ 回退本地 sent（台阶状但不差于旧体验）。
+      // min 防 peerBytes 异常超过 sent。
       const progressTimerInner = setInterval(() => {
+        const peerSilent = Date.now() - this.transferStartedAt > 2000 && this.peerBytes === 0
+        const showBytes = peerSilent ? sent : Math.min(this.peerBytes || sent, sent)
         this.emit('progress', {
           transferId,
           fileName: curName,
-          fileBytes: curSize > 0 ? sent % curSize : 0,
+          fileBytes: curSize > 0 ? showBytes % curSize : 0,
           fileSize: curSize,
-          totalBytes: sent,
+          totalBytes: showBytes,
           done: false
         } satisfies TransferProgress)
       }, 100)
@@ -290,6 +299,9 @@ export class Sender extends EventEmitter {
     } else if (msg.type === 'FILE_ACK') {
       // 分阶段确认：文件已送达对端内存（未落盘）。仅作进度观测，不影响传输推进
       this.emit('file-ack', { transferId: msg.transferId, path: msg.path })
+    } else if (msg.type === 'RECV_PROGRESS') {
+      // 真实进度：对端已收字节（单调取 max，防御乱序回退）
+      this.peerBytes = Math.max(this.peerBytes, msg.bytes)
     }
   }
 

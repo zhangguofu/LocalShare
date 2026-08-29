@@ -68,6 +68,14 @@ export interface KeepaliveMessage {
   type: 'KEEPALIVE'
   transferId: string
 }
+// 接收进度回传：接收方传输期间每 100ms 回发已收字节，发送方以此作为真实进度显示。
+// 动机：发送方本地 sent 含“已入本机发送缓冲但未经网络确认”的字节，读流脉冲导致
+// 进度台阶状；对端已收字节经 TCP 平滑是真实连续的，两端显示同一真实数字。
+export interface ReceiveProgressMessage {
+  type: 'RECV_PROGRESS'
+  transferId: string
+  bytes: number // 接收方已收到的累计字节（含内存队列中尚未落盘部分）
+}
 export interface TransferDoneMessage {
   type: 'TRANSFER_DONE'
   transferId: string
@@ -98,6 +106,7 @@ export type Message =
   | FileDoneMessage
   | FileAckMessage
   | KeepaliveMessage
+  | ReceiveProgressMessage
   | TransferDoneMessage
   | TransferAckMessage
   | CancelMessage
