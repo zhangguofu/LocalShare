@@ -35,6 +35,7 @@ function createWindow(): void {
     title: 'LocalShare',
     autoHideMenuBar: true, // 菜单栏默认不可见（Windows/Linux），按 Alt 临时唤起；macOS 顶栏不受此选项影响
     webPreferences: {
+      backgroundThrottling: false, // 禁用后台渲染节流：接收进度是核心信息，窗口在后台/失焦时仍需实时刷新（否则进度条几秒一跳）
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false

@@ -47,11 +47,13 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
 
 // P1：返回实际发送字节数（文件传输中被截断时与清单 size 不符，供调用方校验）；
 // P2：监听器用完即清，不随文件累积（曾因 socket.on('drain') 每文件挂一组且从不摘除，
-// 多文件传输时 MaxListenersExceededWarning + 无效回调累积）
+// 多文件传输时 MaxListenersExceededWarning + 无效回调累积）；
+// onAlive：写缓冲推进（write 返回 true 或 drain）时上报——发送方存活检测信号之一
 function pipeFile(
   socket: net.Socket,
   stream: ReadStream,
-  onBytes: (n: number) => void
+  onBytes: (n: number) => void,
+  onAlive?: () => void
 ): Promise<{ written: number }> {
   return new Promise((resolve, reject) => {
     let written = 0
@@ -70,12 +72,14 @@ function pipeFile(
     }
     const onDrain = (): void => {
       stream.resume()
+      onAlive?.()
     }
     const onData = (chunk: Buffer | string): void => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
       written += buf.length
       onBytes(buf.length)
       if (!socket.write(buf)) stream.pause()
+      else onAlive?.() // 写入完全进入内核缓冲：对端在持续接收，存活信号
     }
     const onEnd = (): void => {
       if (settled) return
@@ -107,6 +111,10 @@ export class Sender extends EventEmitter {
   private parser = new FrameParser()
   private transferId: string | null = null
   private currentStream: ReadStream | null = null // 当前文件读流（fail 时需销毁，防挂起）
+  // 存活检测（应用层，替代 socket.setTimeout——后者收到数据不重置，背压场景误杀）：
+  // 活着 = 收到对端任何帧（KEEPALIVE/ACK…）或写缓冲推进（write 全入/drain，对端在收）
+  private lastAliveAt = 0
+  private aliveTimer: NodeJS.Timeout | null = null
 
   constructor(private readonly opts: { senderId: string; senderName: string }) {
     super()
@@ -137,9 +145,15 @@ export class Sender extends EventEmitter {
     socket.on('close', () => {
       if (this.transferId) this.fail(new Error('connection closed'))
     })
-    // 传输阶段无数据超时：socket 读写活动 30 秒无进展 → 判定连接死（设计 5.8）
-    socket.on('timeout', () => this.fail(new Error('传输超时：30 秒无数据流动')))
-    socket.setTimeout(0) // OFFER 等待阶段禁用（由 OFFER_TIMEOUT_MS 3 分钟控制）
+    // 无数据超时（应用层实现，替代 socket.setTimeout：后者对“收到数据”不重置计时器，
+    // 接收方水位背压静默期间靠 KEEPALIVE 帧保活，实测 socket.setTimeout 仍会误杀）
+    this.lastAliveAt = Date.now()
+    this.aliveTimer = setInterval(() => {
+      if (!this.transferId) return
+      if (Date.now() - this.lastAliveAt > NO_DATA_TIMEOUT_MS) {
+        this.fail(new Error(`传输超时：${Math.round(NO_DATA_TIMEOUT_MS / 1000)} 秒无数据流动`))
+      }
+    }, Math.min(5000, NO_DATA_TIMEOUT_MS / 4))
 
     try {
       await onceConnect(socket)
@@ -162,8 +176,7 @@ export class Sender extends EventEmitter {
       }
       if (!result.ok) throw new Error(result.reason ?? 'rejected')
 
-      // 进入传输阶段：启用无数据超时（30 秒无读写活动则失败）
-      socket.setTimeout(NO_DATA_TIMEOUT_MS)
+      this.lastAliveAt = Date.now() // 进入传输阶段重置（OFFER 等待期间可能久候）
 
       let sent = 0
       let lastEmit = 0
@@ -190,11 +203,18 @@ export class Sender extends EventEmitter {
           // 大块读取（1MB）减少 data 事件与背压 pause/resume 抖动，显著提升真实网络吞吐
           const stream = createReadStream(entry.absPath, { highWaterMark: 1024 * 1024 })
           this.currentStream = stream
-          const r = await pipeFile(socket, stream, (n) => {
-            written += n
-            sent += n
-            emitProgress(entry.relPath, size)
-          })
+          const r = await pipeFile(
+            socket,
+            stream,
+            (n) => {
+              written += n
+              sent += n
+              emitProgress(entry.relPath, size)
+            },
+            () => {
+              this.lastAliveAt = Date.now()
+            }
+          )
           written = r.written
           this.currentStream = null
         }
@@ -213,6 +233,7 @@ export class Sender extends EventEmitter {
       this.emit('complete', { transferId })
       socket.end()
       this.transferId = null
+      this.stopAliveTimer()
     } catch (err) {
       this.fail(err as Error)
       throw err
@@ -246,6 +267,7 @@ export class Sender extends EventEmitter {
 
   private onMessage(msg: Message): void {
     if (!('transferId' in msg) || msg.transferId !== this.transferId) return
+    this.lastAliveAt = Date.now() // 对端任何帧 = 存活信号（含 KEEPALIVE）
     if (msg.type === 'ACCEPT') {
       this.emit('offer-result', { ok: true })
     } else if (msg.type === 'REJECT') {
@@ -262,7 +284,15 @@ export class Sender extends EventEmitter {
     }
   }
 
+  private stopAliveTimer(): void {
+    if (this.aliveTimer) {
+      clearInterval(this.aliveTimer)
+      this.aliveTimer = null
+    }
+  }
+
   private fail(err: Error): void {
+    this.stopAliveTimer()
     if (!this.transferId && this.socket === null) return
     const id = this.transferId
     this.transferId = null

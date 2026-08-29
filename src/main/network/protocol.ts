@@ -62,6 +62,12 @@ export interface FileAckMessage {
   transferId: string
   path: string
 }
+// 水位背压心跳：接收方 pause 网络期间周期发送，告知发送方“我活着，只是在排空磁盘”。
+// 发送方 socket idle 超时收到任何数据即重置——避免合法背压静默被误判连接死。
+export interface KeepaliveMessage {
+  type: 'KEEPALIVE'
+  transferId: string
+}
 export interface TransferDoneMessage {
   type: 'TRANSFER_DONE'
   transferId: string
@@ -91,6 +97,7 @@ export type Message =
   | FileHeaderMessage
   | FileDoneMessage
   | FileAckMessage
+  | KeepaliveMessage
   | TransferDoneMessage
   | TransferAckMessage
   | CancelMessage

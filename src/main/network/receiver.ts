@@ -146,7 +146,9 @@ class Session extends EventEmitter {
   private msgChain: Promise<void> = Promise.resolve() // 串行化 async 消息处理（非数据帧）
   private receivedBytes = 0 // 本次传输累计已收字节
   private lastProgressAt = 0
-  private lastDataAt = 0 // 最近一次收到数据的时间（无数据超时检查）
+  private lastDataAt = 0 // 最近一次收到网络数据的时间（无数据超时检查）
+  private lastWriteAt = 0 // 最近一次写盘块完成时间：水位背压 pause 期间网络无数据，
+  // 但写盘在消费就是健康状态——超时基准取两者较近者，避免把“自暂停”误判为挂死
   private idleTimer: NodeJS.Timeout | null = null
   // 写盘队列（方案 2）
   private writeQueue: WriteItem[] = []
@@ -154,6 +156,7 @@ class Session extends EventEmitter {
   private writeLoopRunning = false
   private writeIdle: (() => void) | null = null // 队列空时挂起等待的唤醒信号
   private netPaused = false // 水位背压状态（socket 是否处于 pause）
+  private keepaliveTimer: NodeJS.Timeout | null = null // 水位 pause 期间的心跳（防发送方 idle 超时误判）
 
   constructor(
     private readonly socket: net.Socket,
@@ -330,7 +333,7 @@ class Session extends EventEmitter {
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs))
     }
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const stream = sink.stream
       if (!stream) return resolve()
       const onErr = (err: Error): void => {
@@ -349,6 +352,8 @@ class Session extends EventEmitter {
         stream.once('drain', onDrain)
       }
     })
+    // 写盘块完成：更新活动基准（水位 pause 期间证明传输链路仍健康）
+    this.lastWriteAt = Date.now()
   }
 
   // 进度节流：至少 50ms 上报一次，避免高频 IPC
@@ -357,6 +362,31 @@ class Session extends EventEmitter {
     if (now - this.lastProgressAt < 50) return
     this.lastProgressAt = now
     this.ev.onProgress({ transferId: this.transferId, fileName, totalBytes: this.receivedBytes })
+  }
+
+  // 传输期心跳（ACCEPT 后启动，TRANSFER_ACK/cleanup 停止）：每 10 秒发 KEEPALIVE，
+// 发送方存活检测收到任何帧即续命。不再仅在 netPaused 时发——TRANSFER_DONE 后接收方
+// 排空剩余积压期间（可能分钟级），发送方无写无 drain，只有心跳能防止 30s 超时误杀。
+  private startKeepalive(): void {
+    if (this.keepaliveTimer) return
+    this.keepaliveTimer = setInterval(() => {
+      if (this.closed || this.completed) {
+        this.stopKeepalive()
+        return
+      }
+      try {
+        this.socket.write(encodeFrame({ type: 'KEEPALIVE', transferId: this.transferId }))
+      } catch {
+        // 对端可能已断开，忽略
+      }
+    }, 10_000)
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer)
+      this.keepaliveTimer = null
+    }
   }
 
   private async onMessage(msg: Message): Promise<void> {
@@ -409,6 +439,7 @@ class Session extends EventEmitter {
     })
     if (!this.closed) this.socket.write(encodeFrame({ type: 'ACCEPT', transferId: this.transferId }))
     this.startIdleCheck() // 接受后启用无数据超时：30 秒无数据则判定挂死
+    this.startKeepalive() // 传输全程心跳：防发送方存活检测在背压/排空静默期误杀
   }
 
   // 检查指定目录下是否存在与传输清单重名的文件/目录
@@ -445,13 +476,16 @@ class Session extends EventEmitter {
     if (!this.closed) this.socket.destroy()
   }
 
-  // 无数据超时：接受后启动周期检查，最近一次收数据超过阈值即失败
+  // 无数据超时：接受后启动周期检查。判定基准 = max(网络数据, 写盘活动)：
+  // - 水位背压 pause 期间：无网络数据但写盘在消费 → 不超时（修复 v0.1.16 误杀）
+  // - 发送方死亡（连接静默）：两者均停 → 正确超时兑底
   private startIdleCheck(): void {
     if (this.idleTimer) return
     this.lastDataAt = Date.now()
     const interval = Math.min(10_000, Math.max(50, Math.floor(this.noDataTimeoutMs / 4)))
     this.idleTimer = setInterval(() => {
-      if (!this.closed && Date.now() - this.lastDataAt > this.noDataTimeoutMs) {
+      const lastActive = Math.max(this.lastDataAt, this.lastWriteAt)
+      if (!this.closed && Date.now() - lastActive > this.noDataTimeoutMs) {
         this.fail(new Error(`传输超时：${Math.round(this.noDataTimeoutMs / 1000)} 秒无数据`))
       }
     }, interval)
@@ -517,6 +551,7 @@ class Session extends EventEmitter {
       clearInterval(this.idleTimer)
       this.idleTimer = null
     }
+    this.stopKeepalive()
     // 方案 2：清空写盘队列，abort 所有未落盘 sink（data 项与 current 去重）
     const sinks = new Set<AtomicSink>()
     for (const item of this.writeQueue) {

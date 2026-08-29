@@ -267,7 +267,6 @@ function clearCurrent(): void {
   height: 100%;
   border-radius: 2px;
   background: var(--ls-primary);
-  transition: width 0.25s ease;
 }
 .pct { flex: none; font-size: 11px; color: var(--ls-text-3); white-space: nowrap; }
 
