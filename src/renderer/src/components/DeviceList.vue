@@ -16,7 +16,7 @@
     </div>
     <el-divider />
     <div class="manual">
-      <el-input v-model="manualIp" placeholder="IP 或 IP:端口 手动直连" size="small" @keyup.enter="connectManual" />
+      <el-input v-model="manualIp" placeholder="IP:端口 手动直连" size="small" @keyup.enter="connectManual" />
       <el-button size="small" @click="connectManual">设置目标</el-button>
     </div>
     <div v-if="manualTarget" class="manual-target">
