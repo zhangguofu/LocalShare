@@ -65,7 +65,7 @@ async function send(paths: string[]): Promise<void> {
   }
   try {
     const result = await window.api.sendTransfer(toTarget(deviceStore.target), paths)
-    transferStore.pushOutgoing(result)
+    transferStore.pushOutgoing({ ...result, peerName: deviceStore.target.name })
     ElMessage.success('已发起传输，等待对方确认')
   } catch (err) {
     ElMessage.error((err as Error).message)

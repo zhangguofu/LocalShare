@@ -7,6 +7,7 @@ export interface TransferItem {
   transferId: string
   kind: 'outgoing' | 'incoming'
   name: string
+  peerName: string // 对端设备名：接收方=发送者，发送方=目标设备
   state: 'waiting-confirm' | 'transferring' | 'complete' | 'failed' | 'rejected'
   totalBytes: number
   doneBytes: number
@@ -23,6 +24,7 @@ export const useTransferStore = defineStore('transfer', () => {
       transferId: offer.transferId,
       kind: 'incoming',
       name: offer.files.length === 1 ? offer.files[0].path : `${offer.fileCount} 项`,
+      peerName: offer.senderName,
       state: 'waiting-confirm',
       totalBytes: offer.totalBytes,
       doneBytes: 0
@@ -30,11 +32,12 @@ export const useTransferStore = defineStore('transfer', () => {
     pendingOffer.value = offer
   }
 
-  function pushOutgoing(info: { transferId: string; name: string; totalBytes: number }): void {
+  function pushOutgoing(info: { transferId: string; name: string; totalBytes: number; peerName: string }): void {
     items.value.unshift({
       transferId: info.transferId,
       kind: 'outgoing',
       name: info.name,
+      peerName: info.peerName,
       state: 'waiting-confirm',
       totalBytes: info.totalBytes,
       doneBytes: 0

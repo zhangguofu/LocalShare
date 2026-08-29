@@ -33,10 +33,15 @@
       </div>
 
       <div v-for="item in currentItems" :key="item.transferId" class="transfer-item">
-        <!-- 方向图标 -->
-        <span class="dir-icon" :class="item.kind">
-          <svg v-if="item.kind === 'outgoing'" viewBox="0 0 24 24" fill="none"><path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none"><path d="M12 5v14m0 0 6-6m-6 6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <!-- 方向 + 对端设备：一眼看出谁发给谁 -->
+        <span class="dir-block">
+          <span class="dir-icon" :class="item.kind">
+            <svg v-if="item.kind === 'outgoing'" viewBox="0 0 24 24" fill="none"><path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg v-else viewBox="0 0 24 24" fill="none"><path d="M12 5v14m0 0 6-6m-6 6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="dir-label" :title="item.peerName">
+            <span class="dir-peer">{{ item.peerName }}</span>
+          </span>
         </span>
 
         <div class="item-body">
@@ -46,7 +51,7 @@
           </div>
           <div v-if="item.state === 'transferring'" class="line2">
             <div class="bar"><div class="bar-fill" :style="{ width: percent(item) + '%' }"></div></div>
-            <span class="pct">{{ percentText(item) }}%</span>
+            <span class="pct">{{ progressText(item) }}</span>
           </div>
           <div v-else-if="item.state === 'complete' && item.kind === 'incoming' && item.saveDir" class="line2">
             <span class="saved" :title="item.saveDir">{{ item.saveDir }}</span>
@@ -116,6 +121,10 @@ function percent(item: TransferItem): number {
 function percentText(item: TransferItem): string {
   if (item.totalBytes === 0) return '0.00'
   return ((item.doneBytes / item.totalBytes) * 100).toFixed(2)
+}
+// 进度文字：百分比 + 数据量（12.3 MB / 48.3 MB）
+function progressText(item: TransferItem): string {
+  return `${percentText(item)}% · ${formatBytes(item.doneBytes)} / ${formatBytes(item.totalBytes)}`
 }
 function formatBytes(n: number): string {
   if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
@@ -190,9 +199,17 @@ function clearCurrent(): void {
 }
 .transfer-item:hover { background: var(--ls-bg-hover); }
 
+.dir-block {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 58px;
+}
 .dir-icon {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex: none;
   border-radius: 50%;
   display: inline-flex;
@@ -201,7 +218,23 @@ function clearCurrent(): void {
   background: var(--ls-primary-weak);
   color: var(--ls-primary);
 }
-.dir-icon svg { width: 16px; height: 16px; }
+.dir-icon svg { width: 14px; height: 14px; }
+.dir-label {
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.2;
+}
+.dir-peer {
+  max-width: 100%;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ls-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .item-body { flex: 1; min-width: 0; }
 .line1 { display: flex; align-items: baseline; gap: 8px; }
@@ -228,7 +261,7 @@ function clearCurrent(): void {
   background: var(--ls-primary);
   transition: width 0.25s ease;
 }
-.pct { flex: none; font-size: 11px; color: var(--ls-text-3); min-width: 42px; text-align: right; }
+.pct { flex: none; font-size: 11px; color: var(--ls-text-3); white-space: nowrap; }
 
 .saved {
   flex: 1;
