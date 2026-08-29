@@ -268,7 +268,15 @@ function clearCurrent(): void {
   border-radius: 2px;
   background: var(--ls-primary);
 }
-.pct { flex: none; font-size: 11px; color: var(--ls-text-3); white-space: nowrap; }
+.pct {
+  flex: none;
+  min-width: 15em; /* 锁定文字区宽度：数字位数变化不再挤压进度条（条的可用宽度恒定） */
+  text-align: right;
+  font-size: 11px;
+  color: var(--ls-text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums; /* 等宽数字：9.8→10.2 等进位时宽度不变，避免末尾抖动 */
+}
 
 .saved {
   flex: 1;

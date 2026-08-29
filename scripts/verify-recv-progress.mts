@@ -115,6 +115,17 @@ async function main(): Promise<void> {
   console.log(`发送方显示进度采样 ${samples.length} 个`)
   console.log(`采样增量中位 ${(gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] / 1024).toFixed(0)}KB`)
   console.log(`连续 ≥500ms 不动的平台数：${stuckRuns}（旧机制会大量出现）`)
+  // 回退检测：显示值只应单调增（数据源切换跳变会表现为负增量）
+  let regressions = 0
+  let maxReg = 0
+  for (let i = 1; i < samples.length; i++) {
+    const d = samples[i].bytes - samples[i - 1].bytes
+    if (d < 0) {
+      regressions++
+      maxReg = Math.min(maxReg, d)
+    }
+  }
+  console.log(`回退次数：${regressions}（应为 0）${regressions > 0 ? `，最大回退 ${(maxReg / 1024).toFixed(0)}KB` : ''}`)
   const finalBytes = samples[samples.length - 1].bytes
   console.log(`最后显示字节 ${finalBytes} / ${size}（一致: ${finalBytes === size}）`)
 

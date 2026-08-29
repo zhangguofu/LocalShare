@@ -194,8 +194,12 @@ export class Sender extends EventEmitter {
       // 旧版对端不回发（启动 2s 后仍为 0）→ 回退本地 sent（台阶状但不差于旧体验）。
       // min 防 peerBytes 异常超过 sent。
       const progressTimerInner = setInterval(() => {
-        const peerSilent = Date.now() - this.transferStartedAt > 2000 && this.peerBytes === 0
-        const showBytes = peerSilent ? sent : Math.min(this.peerBytes || sent, sent)
+        // 数据源选择（单一源，杜绝运行中切换导致的数值跳变/回退）：
+      // - 新版对端：显示 peerBytes（第一个 RECV_PROGRESS 到达前为 0——诚实：对端尚未确认任何字节）
+      // - 旧版对端：启动 2s 仍无 RECV_PROGRESS → 判定后切 sent（一次向上跳，无回退）
+      // min 防御异常对端报告超出发送量的值
+      const peerSilent = Date.now() - this.transferStartedAt > 2000 && this.peerBytes === 0
+      const showBytes = peerSilent ? sent : Math.min(this.peerBytes, sent)
         this.emit('progress', {
           transferId,
           fileName: curName,
