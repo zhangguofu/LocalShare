@@ -94,16 +94,30 @@ function assertTcpPortFree(port: number): Promise<void> {
   })
 }
 
-function stopServices(): void {
-  discovery?.stop()
-  discovery = null
-  receiver?.stop()
-  receiver = null
+// 停止全部网络服务；discovery.stop / receiver.stop 为异步（延迟关 socket 让 BYE flush），
+// 通过回调让调用方（配置重启 / 退出）同步等待。
+function stopServices(cb?: () => void): void {
+  let remaining = 0
+  const done = (): void => {
+    remaining--
+    if (remaining <= 0) cb?.()
+  }
+  if (discovery) {
+    remaining++
+    discovery.stop(done)
+    discovery = null
+  }
+  if (receiver) {
+    remaining++
+    receiver.stop(done)
+    receiver = null
+  }
+  if (remaining === 0) cb?.()
 }
 
 function restartServices(): void {
-  stopServices()
-  startServices()
+  // 等旧 socket 关闭（BYE flush）后再启动新服务，避免同端口 EADDRINUSE
+  stopServices(() => startServices())
 }
 
 function startServices(): void {
@@ -338,12 +352,19 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('will-quit', () => {
+let quitFlushScheduled = false // 防止 will-quit 重入重复调度
+
+app.on('will-quit', (e) => {
   tray?.destroy()
   tray = null
   // 清理进行中的发送传输：Sender 的 TCP 连接若不关闭会阻止进程退出（任务管理器残留）
   for (const sender of senders.values()) sender.cancel('app_quit')
   senders.clear()
-  discovery?.stop()
-  receiver?.stop()
+  stopServices() // 内部发送 BYE（UDP 广播），socket 延迟关闭给 sendto 留 flush 时间
+  // 推迟进程退出：确保 BYE 报文已进内核并发出，其他端点才能立即感知本设备下线
+  if (!quitFlushScheduled) {
+    quitFlushScheduled = true
+    e.preventDefault()
+    setTimeout(() => app.exit(0), 300)
+  }
 })

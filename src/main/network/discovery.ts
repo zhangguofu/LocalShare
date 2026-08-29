@@ -144,17 +144,26 @@ export class DiscoveryService extends EventEmitter {
     for (const device of removed) this.emit('deviceChange', { kind: 'removed', device })
   }
 
-  stop(): void {
-    if (!this.running) return
+  stop(cb?: () => void): void {
+    if (!this.running) {
+      cb?.()
+      return
+    }
     this.sendBye() // 先广播 BYE（broadcast 依赖 running 守卫），再置位停止
     this.running = false
     if (this.helloInterval) clearInterval(this.helloInterval)
     if (this.reapInterval) clearInterval(this.reapInterval)
     this.helloInterval = null
     this.reapInterval = null
-    this.socket?.close()
+    const socket = this.socket
     this.socket = null
     this.bound = false
     this.devices.clear()
+    // 延迟关闭 socket：BYE 的 sendto 是异步的，立即 close 会丢弃报文导致对端无法即时感知下线；
+    // 250ms 足够事件循环执行 sendto（数据进内核后 close 才安全）。回调用于调用方同步等待。
+    setTimeout(() => {
+      socket?.close()
+      cb?.()
+    }, 250)
   }
 }

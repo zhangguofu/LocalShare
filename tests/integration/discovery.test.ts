@@ -42,7 +42,7 @@ describe('DiscoveryService 集成（真实 UDP，回环）', () => {
       expect(service.getDevices()).toHaveLength(0)
     } finally {
       sender.close()
-      service.stop()
+      await new Promise<void>((resolve) => service.stop(() => resolve()))
     }
   })
 
@@ -65,8 +65,10 @@ describe('DiscoveryService 集成（真实 UDP，回环）', () => {
       const err = await errP
       expect(err.message).toMatch(/EADDRINUSE/)
     } finally {
-      a.stop()
-      b.stop()
+      await Promise.all([
+        new Promise<void>((r) => a.stop(() => r())),
+        new Promise<void>((r) => b.stop(() => r()))
+      ])
     }
   })
 })
