@@ -258,9 +258,17 @@ function registerIpc(): void {
 // 生成托盘图标：优先从应用自身可执行文件提取（Windows 上 process.execPath = 应用 exe，
 // 托盘图标与程序图标一致，当前均为 Electron 默认图标；将来更换应用图标后托盘自动跟随）。
 // 提取失败（如 Linux 可执行文件无图标）时回退内嵌 16×16 蓝色 PNG。
-function createTrayIcon(): NativeImage {
+// 提取托盘图标：1) createFromPath 快速路径（支持 exe/ico）；2) app.getFileIcon 走 Windows Shell
+// 提取 exe 内嵌图标（推荐路径，与应用图标一致）；3) 最后回退内嵌蓝色 PNG。
+async function createTrayIcon(): Promise<NativeImage> {
   const fromExec = nativeImage.createFromPath(process.execPath)
   if (!fromExec.isEmpty()) return fromExec
+  try {
+    const fromShell = await app.getFileIcon(process.execPath, { size: 'normal' })
+    if (!fromShell.isEmpty()) return fromShell
+  } catch {
+    // getFileIcon 失败继续回退
+  }
   const b64 =
     'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGNw6P/ynxLMMGrAqAGjBgwXAwAXB8Ifq/d2QQAAAABJRU5ErkJggg=='
   return nativeImage.createFromDataURL('data:image/png;base64,' + b64)
@@ -279,9 +287,9 @@ function setupAppMenu(): void {
 }
 
 // Windows 系统托盘：关窗后驻留，点击恢复窗口，右键菜单退出
-function setupTray(): void {
+async function setupTray(): Promise<void> {
   if (process.platform === 'darwin' || tray) return
-  const icon = createTrayIcon()
+  const icon = await createTrayIcon()
   if (icon.isEmpty()) {
     console.warn('[tray] 托盘图标为空图像，跳过托盘创建')
     return
@@ -308,11 +316,11 @@ function setupTray(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerIpc()
   createWindow()
   setupAppMenu()
-  setupTray()
+  await setupTray()
   startServices()
   app.on('activate', () => {
     // 点击 Dock（macOS）：从最小化恢复窗口；窗口被销毁（极少见）则重建
