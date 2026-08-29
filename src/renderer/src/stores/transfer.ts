@@ -61,5 +61,11 @@ export const useTransferStore = defineStore('transfer', () => {
     pendingOffer.value = null
   }
 
-  return { items, pendingOffer, pushOffer, pushOutgoing, applyUpdate, clearOffer }
+  // 清除指定传输记录（不碰进行中的项，由“清空”按钮调用）
+  function clearItems(ids: string[]): void {
+    const set = new Set(ids)
+    items.value = items.value.filter((i) => !set.has(i.transferId))
+  }
+
+  return { items, pendingOffer, pushOffer, pushOutgoing, applyUpdate, clearOffer, clearItems }
 })

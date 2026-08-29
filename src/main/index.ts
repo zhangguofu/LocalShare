@@ -162,8 +162,6 @@ function startServices(): void {
 function registerIpc(): void {
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('app:version', () => app.getVersion())
-  // 设置页「退出应用」：完全退出机制的兑底入口（托盘图标可能被系统折叠）
-  ipcMain.on('app:quit', () => app.quit())
   ipcMain.handle('config:get', () => getConfig())
   ipcMain.handle('config:update', async (_e, patch: Partial<AppConfig>) => {
     // 端口变更前探测可用性，避免保存后服务启动失败（应用退出后仍读新端口 → 死循环）

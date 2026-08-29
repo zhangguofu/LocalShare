@@ -10,6 +10,13 @@
           <el-button size="default" @click="pickDir">选择…</el-button>
         </div>
       </el-form-item>
+      <el-form-item label="界面主题">
+        <el-radio-group :model-value="themeMode" @update:model-value="setThemeMode">
+          <el-radio-button value="light">明亮</el-radio-button>
+          <el-radio-button value="dark">深色</el-radio-button>
+          <el-radio-button value="system">跟随系统</el-radio-button>
+        </el-radio-group>
+      </el-form-item>
       <el-form-item label="UDP 端口">
         <el-input-number v-model="form.udpPort" :min="1" :max="65535" controls-position="right" />
       </el-form-item>
@@ -26,7 +33,6 @@
       <div class="footer-row">
         <span class="version">版本 v{{ version }}</span>
         <span class="spacer"></span>
-        <el-button type="danger" plain @click="quitApp">退出应用</el-button>
         <el-button @click="visible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
@@ -36,10 +42,17 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { AppConfig } from '../../../main/config'
+import { useTheme, type ThemeMode } from '../composables/theme'
 
 const visible = defineModel<boolean>({ required: true })
+const { mode: themeMode, setMode } = useTheme()
+
+// 主题即时生效并持久化（纯 UI 偏好，不走主进程配置）
+function setThemeMode(m: string | number | boolean | undefined): void {
+  setMode(m as ThemeMode)
+}
 
 const form = reactive<AppConfig>({
   deviceId: '',
@@ -69,19 +82,6 @@ watch(visible, async (open) => {
 async function pickDir(): Promise<void> {
   const dir = await window.api.pickDirectory()
   if (dir) form.saveDir = dir
-}
-
-async function quitApp(): Promise<void> {
-  try {
-    await ElMessageBox.confirm('退出后应用将停止接收文件。', '退出 LocalShare', {
-      confirmButtonText: '退出',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    window.api.quit()
-  } catch {
-    // 用户取消
-  }
 }
 
 async function save(): Promise<void> {

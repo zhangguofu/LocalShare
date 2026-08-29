@@ -1,7 +1,27 @@
 <template>
-  <div class="drop-zone" @dragover.prevent="over = true" @dragleave="over = false" @drop.prevent="onDrop">
-    <el-empty :image-size="80" description="拖拽文件/文件夹到此处，或点击选择" />
-    <el-button type="primary" @click="pick">选择文件/文件夹</el-button>
+  <div
+    class="drop-zone"
+    :class="{ over, disabled: !deviceStore.target }"
+    @dragover.prevent="over = true"
+    @dragleave="over = false"
+    @drop.prevent="onDrop"
+  >
+    <svg class="dz-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 16V7m0 0-3.5 3.5M12 7l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M4 15.5v2A3.5 3.5 0 0 0 7.5 21h9a3.5 3.5 0 0 0 3.5-3.5v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>
+    <div class="dz-text">
+      <template v-if="deviceStore.target">
+        <span class="dz-main">发送到 <b>{{ deviceStore.target.name }}</b></span>
+        <span class="dz-sub">拖拽文件/文件夹到此处，或点击选择</span>
+      </template>
+      <template v-else>
+        <span class="dz-main">先选择目标设备</span>
+        <span class="dz-sub">在左侧选择在线设备或输入 IP 直连后，即可拖拽发送</span>
+      </template>
+    </div>
+    <el-button size="default" :disabled="!deviceStore.target" @click="pick">选择文件</el-button>
+    <span v-if="over" class="dz-overlay">松开即发送到 {{ deviceStore.target?.name }}</span>
   </div>
 </template>
 
@@ -17,7 +37,6 @@ const over = ref(false)
 const deviceStore = useDeviceStore()
 const transferStore = useTransferStore()
 
-// DeviceInfo → TransferTarget：手动直连设备走 host/port，发现设备走 deviceId
 function toTarget(d: DeviceInfo): TransferTarget {
   if (d.id.startsWith('manual-')) return { host: d.host, port: d.tcpPort }
   return { deviceId: d.id }
@@ -53,13 +72,43 @@ async function send(paths: string[]): Promise<void> {
 
 <style scoped>
 .drop-zone {
-  border: 2px dashed var(--el-border-color);
-  border-radius: 8px;
-  padding: 32px;
+  flex: none;
   display: flex;
-  flex-direction: column;
   align-items: center;
   gap: 12px;
+  padding: 14px 18px;
+  border: 1.5px dashed var(--ls-border-strong);
+  border-radius: var(--ls-radius);
+  background: var(--ls-bg-inset);
+  position: relative;
+  transition: border-color 0.15s, background 0.15s;
 }
-.drop-zone:hover { border-color: var(--el-color-primary); }
+.drop-zone:not(.disabled):hover { border-color: var(--ls-primary); }
+.drop-zone.over {
+  border-color: var(--ls-primary);
+  background: var(--ls-primary-weak);
+}
+
+.dz-icon { width: 22px; height: 22px; color: var(--ls-text-3); flex: none; }
+.drop-zone.over .dz-icon { color: var(--ls-primary); }
+
+.dz-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dz-main { font-size: 13px; font-weight: 500; }
+.dz-main b { color: var(--ls-primary); }
+.dz-sub { font-size: 12px; color: var(--ls-text-3); }
+
+.dz-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ls-radius);
+  background: var(--ls-primary-weak);
+  backdrop-filter: blur(1px);
+  color: var(--ls-primary);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
 </style>

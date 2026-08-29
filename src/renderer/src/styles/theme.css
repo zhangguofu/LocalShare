@@ -1,0 +1,64 @@
+/* LocalShare 语义化主题变量：自有组件一律引用这些变量，不写死颜色。
+   亮色为默认值；暗色由 html.dark（Element Plus 暗色模式同一开关）覆盖。 */
+
+:root {
+  /* 背景层级 */
+  --ls-bg-app: #f5f7fa;        /* 应用底 */
+  --ls-bg-panel: #ffffff;      /* 面板/侧栏 */
+  --ls-bg-hover: #f0f3f8;      /* 列表项 hover */
+  --ls-bg-active: #e8f1fe;     /* 选中项 */
+  --ls-bg-inset: #f7f9fc;      /* 内嵌区（拖放条/空状态） */
+
+  /* 文字层级 */
+  --ls-text-1: #1f2d3d;        /* 主文字 */
+  --ls-text-2: #5e6d82;        /* 次要文字 */
+  --ls-text-3: #909399;        /* 弱化文字（时间戳等） */
+
+  /* 线条与强调 */
+  --ls-border: #e4e7ed;
+  --ls-border-strong: #d3d9e3;
+  --ls-primary: #408ff4;
+  --ls-primary-weak: rgba(64, 143, 244, 0.12);
+  --ls-success: #67c23a;
+  --ls-danger: #f56c6c;
+  --ls-warning: #e6a23c;
+
+  --ls-radius: 8px;
+  --ls-radius-sm: 6px;
+  --ls-shadow: 0 1px 3px rgba(31, 45, 61, 0.06);
+}
+
+html.dark {
+  --ls-bg-app: #141414;
+  --ls-bg-panel: #1d1d1d;
+  --ls-bg-hover: #262626;
+  --ls-bg-active: #1b2a41;
+  --ls-bg-inset: #191919;
+
+  --ls-text-1: #e5eaf3;
+  --ls-text-2: #a3a6ad;
+  --ls-text-3: #7d8085;
+
+  --ls-border: #2c2c2c;
+  --ls-border-strong: #3a3a3a;
+  --ls-primary: #408ff4;
+  --ls-primary-weak: rgba(64, 143, 244, 0.18);
+
+  --ls-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* 全局基础 */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ls-bg-app);
+  color: var(--ls-text-1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Element Plus 弹层跟随主题圆角 */
+.el-dialog { border-radius: var(--ls-radius); }
