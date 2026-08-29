@@ -65,7 +65,7 @@
             {{ stateText(item) }}
           </el-tag>
           <el-button
-            v-if="item.state === 'transferring'"
+            v-if="item.state === 'transferring' || (item.state === 'waiting-confirm' && item.kind === 'outgoing')"
             size="small"
             text
             type="danger"

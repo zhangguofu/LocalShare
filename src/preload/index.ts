@@ -22,7 +22,7 @@ export interface Api {
   updateConfig: (patch: Partial<AppConfig>) => Promise<AppConfig>
   getDevices: () => Promise<DeviceInfo[]>
   onDeviceChange: (cb: (upd: DeviceUpdate) => void) => () => void
-  pickPaths: () => Promise<string[]>
+  pickPaths: (kind: 'file' | 'dir') => Promise<string[]>
   pickDirectory: () => Promise<string | null>
   openPath: (p: string) => Promise<string>
   sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string; name: string; totalBytes: number; fileCount: number }>
@@ -50,7 +50,7 @@ const api: Api = {
     ipcRenderer.on('devices:changed', listener)
     return () => ipcRenderer.removeListener('devices:changed', listener)
   },
-  pickPaths: () => ipcRenderer.invoke('dialog:pick-paths'),
+  pickPaths: (kind) => ipcRenderer.invoke('dialog:pick-paths', kind),
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
   openPath: (p) => ipcRenderer.invoke('shell:open-path', p),
   sendTransfer: (target, paths) => ipcRenderer.invoke('transfer:send', target, paths),

@@ -20,7 +20,10 @@
         <span class="dz-sub">在左侧选择在线设备或输入 IP 直连后，即可拖拽发送</span>
       </template>
     </div>
-    <el-button size="default" :disabled="!deviceStore.target" @click="pick">选择文件</el-button>
+    <div class="dz-actions">
+      <el-button size="default" :disabled="!deviceStore.target" @click="pick('file')">选择文件</el-button>
+      <el-button size="default" :disabled="!deviceStore.target" @click="pick('dir')">选择文件夹</el-button>
+    </div>
     <span v-if="over" class="dz-overlay">松开即发送到 {{ deviceStore.target?.name }}</span>
   </div>
 </template>
@@ -49,8 +52,8 @@ async function onDrop(e: DragEvent): Promise<void> {
   await send(paths)
 }
 
-async function pick(): Promise<void> {
-  const paths = await window.api.pickPaths()
+async function pick(kind: 'file' | 'dir'): Promise<void> {
+  const paths = await window.api.pickPaths(kind)
   if (paths.length > 0) await send(paths)
 }
 
@@ -96,6 +99,8 @@ async function send(paths: string[]): Promise<void> {
 .dz-main { font-size: 13px; font-weight: 500; }
 .dz-main b { color: var(--ls-primary); }
 .dz-sub { font-size: 12px; color: var(--ls-text-3); }
+
+.dz-actions { display: flex; gap: 8px; flex: none; }
 
 .dz-overlay {
   position: absolute;

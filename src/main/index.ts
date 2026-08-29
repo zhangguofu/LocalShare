@@ -182,10 +182,13 @@ function registerIpc(): void {
 
   ipcMain.handle('devices:list', () => discovery?.getDevices() ?? [])
 
-  ipcMain.handle('dialog:pick-paths', async () => {
+  // Windows 上 openFile+openDirectory 同用会退化为只能选文件夹（Electron 已知限制），
+  // 故按 kind 分开：file=选文件，dir=选文件夹；均支持多选
+  ipcMain.handle('dialog:pick-paths', async (_e, kind: 'file' | 'dir') => {
     if (!win) return []
     const r = await dialog.showOpenDialog(win, {
-      properties: ['openFile', 'openDirectory', 'multiSelections']
+      properties:
+        kind === 'dir' ? ['openDirectory', 'multiSelections'] : ['openFile', 'multiSelections']
     })
     return r.canceled ? [] : r.filePaths
   })
