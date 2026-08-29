@@ -14,8 +14,15 @@ export interface TransferProgress {
 }
 
 const OFFER_TIMEOUT_MS = 180_000 // OFFER 等待确认：3 分钟（用户可能离开确认框）
-const ACK_TIMEOUT_MS = 30_000 // TRANSFER_DONE 后等 ACK：30 秒
+const ACK_TIMEOUT_BASE_MS = 30_000 // TRANSFER_DONE 后等 ACK：基础 30 秒
+const ACK_DRAIN_RATE_BYTES = 20 * 1024 * 1024 // 接收方队列排空估算速率（保守值）：动态超时 = 基础 + 发送量/速率
 const NO_DATA_TIMEOUT_MS = 30_000 // 传输中无数据流动（写方向无进展）：30 秒
+
+// 动态 ACK 超时：接收方收包与落盘解耦后，“发完 ≠ 写完”——队列排空需要时间。
+// 只放宽不收紧，避免大文件 + 慢盘被固定 30 秒误杀（设计文档 §5）
+function ackTimeoutMs(totalBytes: number): number {
+  return ACK_TIMEOUT_BASE_MS + Math.ceil(totalBytes / ACK_DRAIN_RATE_BYTES) * 1000
+}
 
 function onceConnect(socket: net.Socket): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -38,17 +45,60 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
   })
 }
 
-function pipeFile(socket: net.Socket, stream: ReadStream, onBytes: (n: number) => void): Promise<void> {
+// P1：返回实际发送字节数（文件传输中被截断时与清单 size 不符，供调用方校验）；
+// P2：监听器用完即清，不随文件累积（曾因 socket.on('drain') 每文件挂一组且从不摘除，
+// 多文件传输时 MaxListenersExceededWarning + 无效回调累积）
+function pipeFile(
+  socket: net.Socket,
+  stream: ReadStream,
+  onBytes: (n: number) => void
+): Promise<{ written: number }> {
   return new Promise((resolve, reject) => {
-    stream.on('error', reject)
-    socket.on('error', reject)
-    stream.on('data', (chunk: Buffer | string) => {
+    let written = 0
+    let settled = false
+    const onStreamErr = (err: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(err)
+    }
+    const onSocketErr = (err: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(err)
+    }
+    const onDrain = (): void => {
+      stream.resume()
+    }
+    const onData = (chunk: Buffer | string): void => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      written += buf.length
       onBytes(buf.length)
       if (!socket.write(buf)) stream.pause()
-    })
-    socket.on('drain', () => stream.resume())
-    stream.on('end', resolve)
+    }
+    const onEnd = (): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve({ written })
+    }
+    // 声明在使用前：TDZ 安全（回调仅在事件触发时执行，但保持声明顺序清晰）
+    const cleanup = (): void => {
+      stream.off('error', onStreamErr)
+      socket.off('error', onSocketErr)
+      socket.off('drain', onDrain)
+      stream.off('data', onData)
+      stream.off('end', onEnd)
+      // settle 后 Sender.fail/cancel 仍可能 stream.destroy(err)（唤醒机制依赖 error 事件）；
+      // 此时上面的监听器已摘除，不挂吞错处理器会变成 uncaught exception（旧实现靠泄漏的监听器兑底）
+      stream.on('error', () => {})
+    }
+    stream.on('error', onStreamErr)
+    socket.on('error', onSocketErr)
+    socket.on('drain', onDrain)
+    stream.on('data', onData)
+    stream.on('end', onEnd)
   })
 }
 
@@ -135,23 +185,31 @@ export class Sender extends EventEmitter {
         if (entry.type === 'dir') continue // 空目录条目无需传输数据
         const size = entry.size
         socket.write(encodeFrame({ type: 'FILE_HEADER', transferId, path: entry.relPath, size }))
+        let written = 0
         if (size > 0) {
           // 大块读取（1MB）减少 data 事件与背压 pause/resume 抖动，显著提升真实网络吞吐
           const stream = createReadStream(entry.absPath, { highWaterMark: 1024 * 1024 })
           this.currentStream = stream
-          await pipeFile(socket, stream, (n) => {
+          const r = await pipeFile(socket, stream, (n) => {
+            written += n
             sent += n
             emitProgress(entry.relPath, size)
           })
+          written = r.written
           this.currentStream = null
         }
-        socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: size }))
+        // P1：报实际发送字节（而非清单值）。若文件在传输中被截断，实际值 < 声明值，
+        // 接收方 FILE_DONE 校验（bytesWritten != size）会真正生效并断开——避免后续帧被误当数据错位落盘
+        if (written !== size) {
+          throw new Error(`文件在传输中被修改（${entry.relPath}）：发送 ${written} 字节，清单 ${size} 字节`)
+        }
+        socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: written }))
         emitProgress(entry.relPath, size, true)
       }
       emitProgress('', 0, true)
 
       socket.write(encodeFrame({ type: 'TRANSFER_DONE', transferId }))
-      await waitFor(this, 'transfer-ack', ACK_TIMEOUT_MS, 'ack timeout')
+      await waitFor(this, 'transfer-ack', ackTimeoutMs(totalBytes), 'ack timeout')
       this.emit('complete', { transferId })
       socket.end()
       this.transferId = null
@@ -198,6 +256,9 @@ export class Sender extends EventEmitter {
       this.fail(new Error(`${msg.code}: ${msg.message}`))
     } else if (msg.type === 'TRANSFER_ACK') {
       this.emit('transfer-ack')
+    } else if (msg.type === 'FILE_ACK') {
+      // 分阶段确认：文件已送达对端内存（未落盘）。仅作进度观测，不影响传输推进
+      this.emit('file-ack', { transferId: msg.transferId, path: msg.path })
     }
   }
 

@@ -7,12 +7,13 @@ import type { TransferProgress } from '../main/network/sender'
 export type TransferTarget = { deviceId: string } | { host: string; port: number }
 
 export interface TransferUpdate {
-  kind: 'progress' | 'complete' | 'failed' | 'error' | 'receive-progress'
+  kind: 'progress' | 'complete' | 'failed' | 'error' | 'receive-progress' | 'file-ack'
   transferId: string
   fileName?: string
   totalBytes?: number
   reason?: string
   saveDir?: string // 接收方完成时携带实际保存目录
+  path?: string // file-ack：已送达对端的文件路径
 }
 
 export interface Api {
@@ -25,7 +26,7 @@ export interface Api {
   pickPaths: (kind: 'file' | 'dir') => Promise<string[]>
   pickDirectory: () => Promise<string | null>
   openPath: (p: string) => Promise<string>
-  sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string; name: string; totalBytes: number; fileCount: number }>
+  sendTransfer: (target: TransferTarget, paths: string[]) => Promise<{ transferId: string; name: string; totalBytes: number; fileCount: number; skippedSymlinks: number }>
   cancelTransfer: (transferId: string) => void
   onTransferUpdate: (cb: (u: TransferUpdate) => void) => () => void
   onOffer: (cb: (offer: OfferSummary) => void) => () => void

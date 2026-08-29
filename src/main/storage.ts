@@ -38,6 +38,10 @@ export async function detectConflicts(entries: FileEntry[], dir: string): Promis
 
 // 原子落盘：写 .part → commit 时 rename 到目标（覆盖语义由 rename 提供）
 // open 为同步操作（mkdirSync + createWriteStream），保证数据到达时流已就绪
+// P1'：已建目录缓存——海量文件同目录时免去每文件 mkdirSync（同步阻塞事件循环）。
+// 仅进程内有效；目录被外部删除的极端场景由 mkdir recursive 幂等性兑底（下次重建）。
+const knownDirs = new Set<string>()
+
 export class AtomicSink {
   private readonly partPath: string
   stream?: WriteStream
@@ -47,7 +51,11 @@ export class AtomicSink {
   }
 
   open(): void {
-    mkdirSync(path.dirname(this.targetPath), { recursive: true })
+    const dir = path.dirname(this.targetPath)
+    if (!knownDirs.has(dir)) {
+      mkdirSync(dir, { recursive: true })
+      knownDirs.add(dir)
+    }
     // 1MB 写入缓冲：小块（默认 16KB）在真实网络下增加系统调用与背压抖动，降低吞吐
     this.stream = createWriteStream(this.partPath, { flags: 'w', highWaterMark: 1024 * 1024 })
   }

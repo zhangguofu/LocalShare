@@ -197,6 +197,30 @@ describe('端到端传输（回环 TCP）', () => {
     await expect(fs.access(path.join(recvDir, 'a.txt.part'))).rejects.toThrow()
   })
 
+  it('文件传输中被截断：发送方按实际字节校验失败，报错而非错位继续（P1 回归）', { timeout: 15000 }, async () => {
+    const srcFile = path.join(root, 'shrink.bin')
+    const initial = Buffer.alloc(2 * 1024 * 1024, 7) // 2MB：保证读流未结束时有机会截断
+    await fs.writeFile(srcFile, initial)
+    const r = await startReceiver()
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const sendP = sender.start(
+      { host: '127.0.0.1', port: TCP_PORT },
+      't-shrink',
+      [{ relPath: 'shrink.bin', absPath: srcFile, type: 'file', size: initial.length }],
+      initial.length
+    )
+    const offer = await offerP
+    r.respond(offer.transferId, 'accept')
+    // 发送进行中把文件截断为 1MB：读流提前 end，实际发送 1MB < 清单 2MB
+    await fs.truncate(srcFile, 1024 * 1024)
+    await expect(sendP).rejects.toThrow(/传输中被修改/)
+    // 接收侧：无完整落盘文件（.part 被失败清理）
+    await new Promise((res) => setTimeout(res, 300))
+    const leftovers = await fs.readdir(recvDir)
+    expect(leftovers).toEqual([])
+  })
+
   it('发送方传输中取消：接收方快速感知失败（不等 30s 超时）且 .part 无残留', { timeout: 15000 }, async () => {
     const srcFile = path.join(root, 'big.bin')
     await fs.writeFile(srcFile, Buffer.alloc(32 * 1024 * 1024, 7))
@@ -207,16 +231,51 @@ describe('端到端传输（回环 TCP）', () => {
     const offer = await offerP
     r.respond(offer.transferId, 'accept')
     await new Promise((res) => setTimeout(res, 10))
+    // 监听先于 cancel 挂上：transferError 在 cancel 后瞬间发出（FIN → end → fail），
+    // 挂晚了会错过事件（新接收管线下早于 sendP reject）
+    const errP = new Promise<{ transferId: string; error: Error }>((res) =>
+      r.once('transferError', (e) => res(e))
+    )
     sender.cancel()
     // 发送方失败
     await expect(sendP).rejects.toThrow()
     // 接收方应通过 end 事件快速感知（FIN → fail），而非等 30s 无数据超时
-    const { error } = await new Promise<{ transferId: string; error: Error }>((res) =>
-      r.once('transferError', (e) => res(e))
-    )
+    const { error } = await errP
     expect(error.message).toMatch(/取消/)
     await new Promise((res) => setTimeout(res, 200)) // 等异步 .part 清理完成
     await expect(fs.access(path.join(recvDir, 'big.bin.part'))).rejects.toThrow()
+  })
+
+  it('慢磁盘（注入写盘延迟）：收包与落盘解耦，传输仍正确完成且内容一致（方案 2 回归）', { timeout: 30000 }, async () => {
+    // 每块写盘延迟 15ms：写盘循环明显慢于网络（回环上数据瞬间到达）。
+    // 预期：网络全速入队、写盘慢慢消费、队列水位受控、全部落盘后 TRANSFER_ACK，
+    // 发送方动态 ACK 超时不误杀；最终内容逐字节一致。
+    const files: WalkEntry[] = []
+    const contents = new Map<string, Buffer>()
+    for (let i = 0; i < 20; i++) {
+      const p = path.join(root, `slow${i}.bin`)
+      const buf = Buffer.alloc(64 * 1024, i)
+      await fs.writeFile(p, buf)
+      contents.set(`slow${i}.bin`, buf)
+      files.push({ relPath: `slow${i}.bin`, absPath: p, type: 'file', size: buf.length })
+    }
+    const totalBytes = 20 * 64 * 1024
+    const r = new Receiver({ port: TCP_PORT, saveDir: () => recvDir, sinkWriteDelayMs: 15 })
+    receiver = r
+    r.start()
+    await new Promise<void>((res) => r.once('listening', res))
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-slow', files, totalBytes)
+    const offer = await offerP
+    r.respond(offer.transferId, 'accept')
+    await sendP // 动态 ACK 超时（30s + totalBytes/20MB/s）容许排空时长
+    // 逐字节校验
+    for (const [name, buf] of contents) {
+      const got = await fs.readFile(path.join(recvDir, name))
+      expect(got.equals(buf)).toBe(true)
+    }
+    expect(await fs.readdir(recvDir)).toHaveLength(20)
   })
 
   it('接收方传输中取消：发送方收到取消提示且 .part 无残留', { timeout: 15000 }, async () => {

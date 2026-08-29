@@ -66,6 +66,9 @@ async function send(paths: string[]): Promise<void> {
   try {
     const result = await window.api.sendTransfer(toTarget(deviceStore.target), paths)
     transferStore.pushOutgoing({ ...result, peerName: deviceStore.target.name })
+    if (result.skippedSymlinks > 0) {
+      ElMessage.warning(`已跳过 ${result.skippedSymlinks} 个符号链接（不支持传输链接本身）`)
+    }
     ElMessage.success('已发起传输，等待对方确认')
   } catch (err) {
     ElMessage.error((err as Error).message)

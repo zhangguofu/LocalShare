@@ -8,9 +8,11 @@ export interface TransferItem {
   kind: 'outgoing' | 'incoming'
   name: string
   peerName: string // 对端设备名：接收方=发送者，发送方=目标设备
-  state: 'waiting-confirm' | 'transferring' | 'complete' | 'failed' | 'rejected'
+  state: 'waiting-confirm' | 'transferring' | 'delivered' | 'complete' | 'failed' | 'rejected'
   totalBytes: number
   doneBytes: number
+  fileCount: number
+  ackedFiles: number // 发送方：已收到 FILE_ACK 的文件数（已送达对端内存）
   reason?: string
   saveDir?: string // 接收方完成时的实际保存目录
 }
@@ -27,12 +29,20 @@ export const useTransferStore = defineStore('transfer', () => {
       peerName: offer.senderName,
       state: 'waiting-confirm',
       totalBytes: offer.totalBytes,
-      doneBytes: 0
+      doneBytes: 0,
+      fileCount: offer.fileCount,
+      ackedFiles: 0
     })
     pendingOffer.value = offer
   }
 
-  function pushOutgoing(info: { transferId: string; name: string; totalBytes: number; peerName: string }): void {
+  function pushOutgoing(info: {
+    transferId: string
+    name: string
+    totalBytes: number
+    peerName: string
+    fileCount: number
+  }): void {
     items.value.unshift({
       transferId: info.transferId,
       kind: 'outgoing',
@@ -40,7 +50,9 @@ export const useTransferStore = defineStore('transfer', () => {
       peerName: info.peerName,
       state: 'waiting-confirm',
       totalBytes: info.totalBytes,
-      doneBytes: 0
+      doneBytes: 0,
+      fileCount: info.fileCount,
+      ackedFiles: 0
     })
   }
 
@@ -50,6 +62,12 @@ export const useTransferStore = defineStore('transfer', () => {
     if (u.kind === 'progress' || u.kind === 'receive-progress') {
       item.state = 'transferring'
       item.doneBytes = u.totalBytes ?? 0
+    } else if (u.kind === 'file-ack') {
+      // 分阶段确认：文件送达对端；数据全部发完且全部送达 → 中间态 delivered
+      item.ackedFiles += 1
+      if (item.ackedFiles >= item.fileCount && item.doneBytes >= item.totalBytes) {
+        item.state = 'delivered'
+      }
     } else if (u.kind === 'complete') {
       item.state = 'complete'
       item.doneBytes = item.totalBytes

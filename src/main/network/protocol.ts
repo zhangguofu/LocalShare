@@ -54,6 +54,14 @@ export interface FileDoneMessage {
   path: string
   bytesWritten: number
 }
+// 分阶段确认（接收管线优化）：文件数据全部入接收方内存队列即回，
+// 不等落盘。发送方据此显示“已送达”；TRANSFER_ACK（全部落盘）仍是最终安全终点。
+// 兼容性：旧版发送方不认识此帧会忽略（未知类型 default 跳过）
+export interface FileAckMessage {
+  type: 'FILE_ACK'
+  transferId: string
+  path: string
+}
 export interface TransferDoneMessage {
   type: 'TRANSFER_DONE'
   transferId: string
@@ -82,6 +90,7 @@ export type Message =
   | RejectMessage
   | FileHeaderMessage
   | FileDoneMessage
+  | FileAckMessage
   | TransferDoneMessage
   | TransferAckMessage
   | CancelMessage

@@ -34,18 +34,38 @@ export interface ReceiveProgress {
 
 const NO_DATA_TIMEOUT_MS = 30_000 // 接受后 30 秒无数据到达 → 判定传输挂死（设计 5.8）
 
+// 接收管线（方案 2）：收包与落盘解耦。网络线程只入队，写盘循环顺序消费。
+// 水位背压（滞回）：积压超 HIGH 暂停网络（TCP 零窗口，发送方自动停发），
+// 消费到 LOW 以下恢复。磁盘毫秒级抖动被队列吸收，不再传导为网络停顿。
+const HIGH_WATER_BYTES = 384 * 1024 * 1024
+const LOW_WATER_BYTES = 128 * 1024 * 1024
+
+// 写盘队列项：data 携带所属 sink（入队后 this.current 可能已指向下一文件）
+type WriteItem =
+  | { kind: 'data'; sink: AtomicSink; buf: Buffer }
+  | { kind: 'file-done'; sink: AtomicSink; path: string; bytesWritten: number; size: number }
+  | { kind: 'transfer-done' }
+
 type SessionCallbacks = {
   onOffer: (offer: OfferSummary) => void
   onProgress: (p: ReceiveProgress) => void
   onComplete: (transferId: string, saveDir: string) => void
   onError: (transferId: string, err: Error) => void
+  sinkWriteDelayMs?: number // 测试用：写盘延迟注入（模拟慢磁盘）
 }
 
 export class Receiver extends EventEmitter {
   private server: net.Server | null = null
   private readonly sessions = new Map<string, Session>()
 
-  constructor(private readonly opts: { port: number; saveDir: () => string; noDataTimeoutMs?: number }) {
+  constructor(
+    private readonly opts: {
+      port: number
+      saveDir: () => string
+      noDataTimeoutMs?: number
+      sinkWriteDelayMs?: number // 测试用：注入写盘延迟，模拟慢磁盘/磁盘抖动
+    }
+  ) {
     super()
   }
 
@@ -54,6 +74,7 @@ export class Receiver extends EventEmitter {
     if (this.server) return
     const server = net.createServer((socket) => {
       const session = new Session(socket, this.opts.saveDir(), this.opts.noDataTimeoutMs ?? NO_DATA_TIMEOUT_MS, {
+        sinkWriteDelayMs: this.opts.sinkWriteDelayMs ?? 0,
         onOffer: (offer) => {
           this.sessions.delete('pending')
           this.sessions.set(offer.transferId, session)
@@ -127,6 +148,12 @@ class Session extends EventEmitter {
   private lastProgressAt = 0
   private lastDataAt = 0 // 最近一次收到数据的时间（无数据超时检查）
   private idleTimer: NodeJS.Timeout | null = null
+  // 写盘队列（方案 2）
+  private writeQueue: WriteItem[] = []
+  private queuedBytes = 0 // 队列内未落盘字节
+  private writeLoopRunning = false
+  private writeIdle: (() => void) | null = null // 队列空时挂起等待的唤醒信号
+  private netPaused = false // 水位背压状态（socket 是否处于 pause）
 
   constructor(
     private readonly socket: net.Socket,
@@ -210,25 +237,118 @@ class Session extends EventEmitter {
     if (msg.size > 0) this.state = 'DATA'
   }
 
-  // 同步消费文件数据；写满 size 后回 CTRL，剩余字节递归回到帧解析。带背压：
-  // sink 缓冲写满（write 返回 false）时暂停 socket，待 drain 后恢复（设计 5.4 内存恒定）
+  // 同步消费文件数据（方案 2 改造）：入队而不写盘；写满 size 后回 CTRL，剩余字节递归回帧解析。
+  // 水位背压：积压超 HIGH 暂停网络（零窗口），写盘循环消费到 LOW 以下恢复。
   private consumeData(chunk: Buffer): void {
     const cur = this.current!
     const need = cur.header.size - cur.written
-    if (chunk.length <= need) {
-      if (!cur.sink.write(chunk)) this.pauseForDrain(cur)
-      cur.written += chunk.length
-      this.receivedBytes += chunk.length
-      this.emitProgress(cur.header.path)
-      if (cur.written === cur.header.size) this.state = 'CTRL'
-      return
-    }
-    if (!cur.sink.write(chunk.subarray(0, need))) this.pauseForDrain(cur)
-    cur.written = cur.header.size
-    this.receivedBytes += need
+    const take = Math.min(chunk.length, need)
+    // socket data 的 chunk 每次都是新 Buffer，subarray 视图安全（不会被复用覆盖）
+    this.writeQueue.push({ kind: 'data', sink: cur.sink, buf: chunk.subarray(0, take) })
+    this.queuedBytes += take
+    cur.written += take
+    this.receivedBytes += take
     this.emitProgress(cur.header.path)
-    this.state = 'CTRL'
-    this.onData(chunk.subarray(need))
+    if (cur.written === cur.header.size) this.state = 'CTRL'
+    if (this.queuedBytes > HIGH_WATER_BYTES && !this.netPaused && !this.closed) {
+      this.netPaused = true
+      this.socket.pause()
+    }
+    this.kickWriteLoop()
+    if (chunk.length > take) this.onData(chunk.subarray(take))
+  }
+
+  // 唤醒写盘循环：未运行则启动；已运行且在等数据则唤醒（writeIdle 回调）
+  private kickWriteLoop(): void {
+    if (this.closed) return
+    this.writeIdle?.()
+    if (this.writeLoopRunning) return
+    this.writeLoopRunning = true
+    void this.writeLoop().finally(() => {
+      this.writeLoopRunning = false
+    })
+  }
+
+  // 写盘循环：顺序消费队列。data → 写 .part（await drain，慢盘在此减速）；
+  // file-done → flush+rename（原子落盘）；transfer-done → 全部落盘完成，回 TRANSFER_ACK。
+  private async writeLoop(): Promise<void> {
+    for (;;) {
+      if (this.closed) {
+        this.writeQueue = []
+        this.queuedBytes = 0
+        return
+      }
+      const item = this.writeQueue.shift()
+      if (!item) {
+        // 队列空：若因水位暂停则恢复网络（空队列必然低于低水位）
+        if (this.netPaused && !this.closed) {
+          this.netPaused = false
+          this.socket.resume()
+        }
+        await new Promise<void>((r) => {
+          this.writeIdle = r
+        })
+        this.writeIdle = null
+        continue
+      }
+      try {
+        if (item.kind === 'data') {
+          await this.writeToDisk(item.sink, item.buf)
+          this.queuedBytes -= item.buf.length
+          if (this.netPaused && this.queuedBytes < LOW_WATER_BYTES && !this.closed) {
+            this.netPaused = false
+            this.socket.resume()
+          }
+        } else if (item.kind === 'file-done') {
+          await item.sink.commit() // flush + rename 原子落盘
+          this.ev.onProgress({
+            transferId: this.transferId,
+            fileName: item.path,
+            totalBytes: this.receivedBytes
+          })
+        } else {
+          // transfer-done：队列在此项之前的所有 data/file-done 均已消费 → 全部落盘完成
+          this.completed = true
+          if (!this.closed) this.socket.write(encodeFrame({ type: 'TRANSFER_ACK', transferId: this.transferId }))
+          this.ev.onComplete(this.transferId, this.targetDir ?? this.defaultDir)
+          if (!this.closed) this.socket.end()
+          this.cleanup()
+          return
+        }
+      } catch (err) {
+        // 落盘失败（磁盘满/权限/rename 失败）：发 ERROR 帧，发送方显示具体原因（设计 7）
+        this.sendError('write_failed', (err as Error).message)
+        this.fail(err as Error)
+        return
+      }
+    }
+  }
+
+  private async writeToDisk(sink: AtomicSink, buf: Buffer): Promise<void> {
+    // 测试注入：模拟慢磁盘（每块写前延迟；网络侧不受影响，仅写盘循环减速）
+    const delayMs = this.ev.sinkWriteDelayMs ?? 0
+    if (delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+    return new Promise((resolve, reject) => {
+      const stream = sink.stream
+      if (!stream) return resolve()
+      const onErr = (err: Error): void => {
+        stream.off('drain', onDrain)
+        reject(err)
+      }
+      const onDrain = (): void => {
+        stream.off('error', onErr)
+        resolve()
+      }
+      stream.once('error', onErr)
+      if (sink.write(buf)) {
+        stream.off('error', onErr)
+        resolve()
+      } else {
+        stream.once('drain', onDrain)
+      }
+    })
   }
 
   // 进度节流：至少 50ms 上报一次，避免高频 IPC
@@ -237,13 +357,6 @@ class Session extends EventEmitter {
     if (now - this.lastProgressAt < 50) return
     this.lastProgressAt = now
     this.ev.onProgress({ transferId: this.transferId, fileName, totalBytes: this.receivedBytes })
-  }
-
-  private pauseForDrain(cur: { sink: AtomicSink }): void {
-    this.socket.pause()
-    cur.sink.stream?.once('drain', () => {
-      if (!this.closed) this.socket.resume()
-    })
   }
 
   private async onMessage(msg: Message): Promise<void> {
@@ -344,8 +457,8 @@ class Session extends EventEmitter {
     }, interval)
   }
 
-  private async onFileDoneSync(msg: FileDoneMessage): Promise<void> {
-    // 同步校验文件完成：current 必须匹配、字节数一致；commit 异步入链
+  private onFileDoneSync(msg: FileDoneMessage): void {
+    // 同步校验文件完成：current 必须匹配、字节数一致；commit 改由写盘循环在队列序执行
     if (!this.current || this.current.header.path !== msg.path) {
       throw new Error('protocol error: FILE_DONE without matching file')
     }
@@ -354,25 +467,39 @@ class Session extends EventEmitter {
     }
     const cur = this.current
     this.current = null
-    this.msgChain = this.msgChain
-      .then(() => cur.sink.commit())
-      .catch((err: Error) => {
-        // 落盘失败（磁盘满/权限/rename 失败）：发 ERROR 帧，发送方显示具体原因（设计 7）
-        this.sendError('write_failed', err.message)
-        this.fail(err)
-      })
-    this.ev.onProgress({ transferId: this.transferId, fileName: msg.path, totalBytes: this.receivedBytes })
+    // 入队 file-done（携带 sink 快照：入队后 this.current 可能已指向下一文件）
+    this.writeQueue.push({
+      kind: 'file-done',
+      sink: cur.sink,
+      path: msg.path,
+      bytesWritten: msg.bytesWritten,
+      size: cur.header.size
+    })
+    this.kickWriteLoop()
+    // FILE_ACK：文件数据全部入队即回（不等落盘）——发送方可提前显示“已送达”。
+    // 数据已在本机内存，后续落盘由本机写盘循环保证；旧版发送方不认识此帧会忽略。
+    if (!this.closed) {
+      try {
+        this.socket.write(encodeFrame({ type: 'FILE_ACK', transferId: this.transferId, path: msg.path }))
+      } catch {
+        // 对端可能已断开，忽略
+      }
+    }
   }
 
   private async onTransferDone(_msg: Message): Promise<void> {
     if (this.current) {
       throw new Error('protocol error: TRANSFER_DONE during file transfer')
     }
-    this.completed = true
-    this.socket.write(encodeFrame({ type: 'TRANSFER_ACK', transferId: this.transferId }))
-    this.ev.onComplete(this.transferId, this.targetDir ?? this.defaultDir)
-    this.socket.end()
-    this.cleanup()
+    // 数据已全部到达：停用无数据超时（剩余是本地落盘排空，不再是“连接挂死”信号）
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer)
+      this.idleTimer = null
+    }
+    // 入队 transfer-done：写盘循环消费到它时，之前所有 data/file-done 均已落盘 →
+    // TRANSFER_ACK 在“全部落盘”后发出（安全语义不变），发送方动态超时兼容排空时长
+    this.writeQueue.push({ kind: 'transfer-done' })
+    this.kickWriteLoop()
   }
 
   // 发送 ERROR 帧（本地资源错误时；协议违规/对端主动行为不发送）
@@ -390,10 +517,21 @@ class Session extends EventEmitter {
       clearInterval(this.idleTimer)
       this.idleTimer = null
     }
+    // 方案 2：清空写盘队列，abort 所有未落盘 sink（data 项与 current 去重）
+    const sinks = new Set<AtomicSink>()
+    for (const item of this.writeQueue) {
+      if (item.kind !== 'transfer-done') sinks.add(item.sink)
+    }
+    this.writeQueue = []
+    this.queuedBytes = 0
     if (this.current) {
-      void this.current.sink.abort()
+      sinks.add(this.current.sink)
       this.current = null
     }
+    for (const s of sinks) void s.abort()
+    // 唤醒挂起的写循环（队列已空 + closed，循环会在下轮自行退出）
+    this.writeIdle?.()
+    this.netPaused = false
     this.state = 'CTRL'
   }
 

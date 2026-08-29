@@ -63,10 +63,16 @@
           <div v-else-if="item.state === 'waiting-confirm'" class="line2">
             <span class="hint">等待对方确认…</span>
           </div>
+          <div v-else-if="item.state === 'delivered'" class="line2">
+            <span class="hint">已送达对端（{{ item.ackedFiles }}/{{ item.fileCount }} 个文件），等待对方落盘…</span>
+          </div>
         </div>
 
         <div class="item-side">
-          <el-tag v-if="item.state !== 'transferring'" :type="tagType(item.state)" size="small" effect="plain" round>
+          <el-tag v-if="item.state === 'transferring' || item.state === 'delivered'" :type="item.state === 'transferring' ? 'warning' : 'info'" size="small" effect="plain" round>
+            {{ stateText(item) }}
+          </el-tag>
+          <el-tag v-else :type="tagType(item.state)" size="small" effect="plain" round>
             {{ stateText(item) }}
           </el-tag>
           <el-button
@@ -90,11 +96,11 @@ import { useTransferStore, type TransferItem } from '../stores/transfer'
 const transferStore = useTransferStore()
 const activeTab = ref<'active' | 'done' | 'failed'>('active')
 
-// 分类：进行中（含等待确认）；已完成；失败/拒绝
+// 分类：进行中（含等待确认/已送达待落盘）；已完成；失败/拒绝
 const counts = computed(() => {
   const c = { active: 0, done: 0, failed: 0 }
   for (const t of transferStore.items) {
-    if (t.state === 'transferring' || t.state === 'waiting-confirm') c.active++
+    if (t.state === 'transferring' || t.state === 'waiting-confirm' || t.state === 'delivered') c.active++
     else if (t.state === 'complete') c.done++
     else c.failed++
   }
@@ -103,7 +109,8 @@ const counts = computed(() => {
 
 const currentItems = computed(() => {
   const list = transferStore.items
-  if (activeTab.value === 'active') return list.filter((t) => t.state === 'transferring' || t.state === 'waiting-confirm')
+  if (activeTab.value === 'active')
+    return list.filter((t) => t.state === 'transferring' || t.state === 'waiting-confirm' || t.state === 'delivered')
   if (activeTab.value === 'done') return list.filter((t) => t.state === 'complete')
   return list.filter((t) => t.state === 'failed' || t.state === 'rejected')
 })
@@ -140,6 +147,7 @@ function tagType(s: TransferItem['state']): 'success' | 'danger' | 'warning' | '
 }
 function stateText(item: TransferItem): string {
   if (item.state === 'complete') return item.kind === 'outgoing' ? '已发送' : '已接收'
+  if (item.state === 'delivered') return '已送达对端'
   return { 'waiting-confirm': '等待确认', transferring: '传输中', failed: '失败', rejected: '已拒绝' }[item.state]
 }
 function cancel(transferId: string): void {

@@ -12,6 +12,7 @@ export interface WalkEntry {
 export interface WalkResult {
   entries: WalkEntry[]
   totalBytes: number
+  skippedSymlinks: number // P3：被跳过的符号链接数（含子目录内），发起时提示用户
 }
 
 const FILE_STAT_CONCURRENCY = 64
@@ -20,26 +21,31 @@ const DIR_WALK_CONCURRENCY = 8
 export async function walkPaths(inputPaths: string[]): Promise<WalkResult> {
   const entries: WalkEntry[] = []
   let totalBytes = 0
+  let skippedSymlinks = 0
   for (const input of inputPaths) {
     const stat = await fs.lstat(input)
-    if (stat.isSymbolicLink()) continue
+    if (stat.isSymbolicLink()) {
+      skippedSymlinks++
+      continue
+    }
     const abs = path.resolve(input)
     const base = path.basename(abs)
     if (stat.isDirectory()) {
-      await walkDir(abs, base, entries, (n) => (totalBytes += n))
+      await walkDir(abs, base, entries, (n) => (totalBytes += n), (n) => (skippedSymlinks += n))
     } else if (stat.isFile()) {
       entries.push({ type: 'file', relPath: base, absPath: abs, size: stat.size })
       totalBytes += stat.size
     }
   }
-  return { entries, totalBytes }
+  return { entries, totalBytes, skippedSymlinks }
 }
 
 async function walkDir(
   dirAbs: string,
   dirRel: string,
   entries: WalkEntry[],
-  addBytes: (n: number) => void
+  addBytes: (n: number) => void,
+  addSkipped: (n: number) => void
 ): Promise<void> {
   const dirents = await fs.readdir(dirAbs, { withFileTypes: true })
   if (dirents.length === 0) {
@@ -49,7 +55,10 @@ async function walkDir(
   const files: { name: string }[] = []
   const dirs: { name: string }[] = []
   for (const d of dirents) {
-    if (d.isSymbolicLink()) continue
+    if (d.isSymbolicLink()) {
+      addSkipped(1)
+      continue
+    }
     if (d.isDirectory()) dirs.push(d)
     else if (d.isFile()) files.push(d)
   }
@@ -61,6 +70,6 @@ async function walkDir(
     addBytes(st.size)
   })
   await runPool(dirs, DIR_WALK_CONCURRENCY, (d) =>
-    walkDir(path.join(dirAbs, d.name), dirRel + '/' + d.name, entries, addBytes)
+    walkDir(path.join(dirAbs, d.name), dirRel + '/' + d.name, entries, addBytes, addSkipped)
   )
 }

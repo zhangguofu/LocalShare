@@ -211,13 +211,15 @@ function registerIpc(): void {
       host = target.host
       port = target.port
     }
-    const { entries, totalBytes } = await walkPaths(paths)
+    const { entries, totalBytes, skippedSymlinks } = await walkPaths(paths)
     if (entries.length === 0) throw new Error('没有可发送的内容（空选择或仅符号链接）')
     const name = entries.length === 1 ? entries[0].relPath : `${entries.length} 项`
     const transferId = randomUUID()
     const sender = new Sender({ senderId: getConfig().deviceId, senderName: getConfig().deviceName })
     senders.set(transferId, sender)
     sender.on('progress', (p) => win?.webContents.send('transfer:update', { kind: 'progress', ...p }))
+    // 分阶段确认：文件已送达对端（未落盘）——UI 可显示“已送达 N/M”，与最终“已完成”区分
+    sender.on('file-ack', (a) => win?.webContents.send('transfer:update', { kind: 'file-ack', ...a }))
     sender.on('complete', (c) => {
       win?.webContents.send('transfer:update', { kind: 'complete', ...c })
       senders.delete(transferId)
@@ -229,7 +231,7 @@ function registerIpc(): void {
     void sender.start({ host, port }, transferId, entries, totalBytes).catch(() => {
       // 失败已通过 'failed' 事件上报 UI
     })
-    return { transferId, name, totalBytes, fileCount: entries.length }
+    return { transferId, name, totalBytes, fileCount: entries.length, skippedSymlinks }
   })
 
   ipcMain.handle('shell:open-path', async (_e, p: string) => {
