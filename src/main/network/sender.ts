@@ -132,6 +132,7 @@ export class Sender extends EventEmitter {
     this.transferId = transferId
     const socket = net.createConnection(target)
     this.socket = socket
+    let progressTimer: NodeJS.Timeout | null = null // 作用域提升：finally 里统一清理（成功/失败/取消）
     socket.setNoDelay(true)
     socket.on('data', (chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
@@ -179,20 +180,26 @@ export class Sender extends EventEmitter {
       this.lastAliveAt = Date.now() // 进入传输阶段重置（OFFER 等待期间可能久候）
 
       let sent = 0
-      let lastEmit = 0
-      // 节流：至少 50ms 上报一次，避免高频 IPC；force 用于文件边界/结束时强制上报
-      const emitProgress = (fileName: string, fileSize: number, force = false): void => {
-        const now = Date.now()
-        if (!force && now - lastEmit < 50) return
-        lastEmit = now
+      // 当前文件名/大小（定时上报用；读流事件只更新它们，不再直接触发上报）
+      let curName = ''
+      let curSize = 0
+      // 进度上报：定时器驱动（100ms 匀速），与读流 pause/drain 脉冲解耦。
+      // 原事件驱动下：本地读远快于网络 → 冲一批停一批等 drain → 进度呈脉冲式跳动（实测发送方比接收方“慢”）。
+      // 定时器读当前 sent 快照，读流静默期也有上报；接收方不受影响（网络到达被 TCP 平滑，天然连续）。
+      const progressTimerInner = setInterval(() => {
         this.emit('progress', {
           transferId,
-          fileName,
-          fileBytes: sent % (fileSize || 1),
-          fileSize,
+          fileName: curName,
+          fileBytes: curSize > 0 ? sent % curSize : 0,
+          fileSize: curSize,
           totalBytes: sent,
           done: false
         } satisfies TransferProgress)
+      }, 100)
+      progressTimer = progressTimerInner
+      const emitProgress = (fileName: string, fileSize: number): void => {
+        curName = fileName
+        curSize = fileSize
       }
       for (const entry of entries) {
         if (entry.type === 'dir') continue // 空目录条目无需传输数据
@@ -224,9 +231,9 @@ export class Sender extends EventEmitter {
           throw new Error(`文件在传输中被修改（${entry.relPath}）：发送 ${written} 字节，清单 ${size} 字节`)
         }
         socket.write(encodeFrame({ type: 'FILE_DONE', transferId, path: entry.relPath, bytesWritten: written }))
-        emitProgress(entry.relPath, size, true)
+        emitProgress(entry.relPath, size)
       }
-      emitProgress('', 0, true)
+      clearInterval(progressTimerInner) // 数据全部发完：停定时器，最后一帧由 complete 事件呈现
 
       socket.write(encodeFrame({ type: 'TRANSFER_DONE', transferId }))
       await waitFor(this, 'transfer-ack', ackTimeoutMs(totalBytes), 'ack timeout')
@@ -237,6 +244,8 @@ export class Sender extends EventEmitter {
     } catch (err) {
       this.fail(err as Error)
       throw err
+    } finally {
+      if (progressTimer) clearInterval(progressTimer) // 异常/取消路径同样清理，防幽灵定时器持续发 progress 事件
     }
   }
 
