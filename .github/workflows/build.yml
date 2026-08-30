@@ -21,11 +21,11 @@ jobs:
     permissions:
       contents: write # 发布 Release 需要（tag 触发时）
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -76,7 +76,7 @@ jobs:
       - name: Upload artifacts
         # 非 tag 触发时上传产物供下载/调试
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: localshare-${{ matrix.os }}
           path: |
