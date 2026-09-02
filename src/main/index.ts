@@ -267,6 +267,13 @@ function registerIpc(): void {
     if (targetDir) {
       const conflicts = await receiver.checkTargetDirConflicts(transferId, targetDir)
       if (conflicts && !force) return { conflicts: true, ok: false }
+      // 接收通常成批相关：用户换位置接收后，将该位置设为新默认，下次自动存到这里
+      try {
+        await updateConfig({ saveDir: targetDir })
+      } catch (err) {
+        // 持久化失败不阻断本次接收（本次仍存到 targetDir，只是下次不记住）
+        console.warn('[receive] 持久化默认保存目录失败：', err)
+      }
     }
     receiver.respond(transferId, 'accept', targetDir)
     return { ok: true }
@@ -319,7 +326,7 @@ async function setupTray(): Promise<void> {
     tray.setToolTip('LocalShare')
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: '打开 LocalShare', click: () => { win?.show(); win?.focus() } },
+        { label: '打开', click: () => { win?.show(); win?.focus() } },
         { type: 'separator' },
         { label: '退出', click: () => app.quit() }
       ])

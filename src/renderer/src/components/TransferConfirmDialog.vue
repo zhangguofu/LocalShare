@@ -51,9 +51,11 @@ onMounted(async () => {
   defaultDir.value = (await window.api.getConfig()).saveDir
 })
 
-// 打开确认框：目标目录重置为默认目录，冲突状态取 OFFER 已计算的默认目录冲突
-watch(offer, (o) => {
+// 打开确认框：重新读最新默认目录（可能因上次“换位置接收”已更新），
+// 目标目录重置为默认，冲突状态取 OFFER 已计算的默认目录冲突
+watch(offer, async (o) => {
   if (o) {
+    defaultDir.value = (await window.api.getConfig()).saveDir
     currentDir.value = defaultDir.value
     currentConflicts.value = o.conflicts
     checking.value = false
@@ -98,6 +100,10 @@ async function accept(): Promise<void> {
   )
   if (result.ok) {
     transferStore.clearOffer()
+    // 换位置接收：主进程已把新位置持久化为默认，提示用户（下次自动存到这里）
+    if (currentDir.value && currentDir.value !== defaultDir.value) {
+      ElMessage.success(`已接收，默认保存位置已更新为：${currentDir.value}`)
+    }
     return
   }
   if (result.conflicts) {

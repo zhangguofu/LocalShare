@@ -55,7 +55,7 @@
           </div>
           <div v-else-if="item.state === 'complete' && item.kind === 'incoming' && item.saveDir" class="line2">
             <span class="saved" :title="item.saveDir">{{ item.saveDir }}</span>
-            <button class="link-btn" @click="openFolder(item.saveDir)">打开</button>
+            <button class="link-btn" @click="openFolder(item.saveDir)">打开文件夹</button>
           </div>
           <div v-else-if="item.reason" class="line2">
             <span class="reason">{{ item.reason }}</span>
