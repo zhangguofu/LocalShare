@@ -457,7 +457,7 @@ electron_builder_binaries_mirror=https://npmmirror.com/mirrors/electron-builder-
 
 ### 9.5 成功标准
 
-- Win/Mac 同局域网可互相发现，设备列表 12 秒内出现/消失。
+- Win/Mac 同局域网可互相发现，设备上线约 3 秒出现在列表、下线约 12 秒移除。
 - 拖拽文件/文件夹 → 确认 → 传输完成，目录结构完整（含空目录）。
 - 冲突场景"覆盖 / 换位置"可用；拒绝、中断、离线均有清晰提示。
 - 千兆局域网 1GB 文件传输可用，CPU 占用合理。
