@@ -65,6 +65,33 @@ describe('端到端传输（回环 TCP）', () => {
     expect(await fs.readFile(path.join(recvDir, 'a.txt'), 'utf8')).toBe('hello localshare')
   })
 
+  it('传入预编码 OFFER 帧时被复用（清单预检路径不重复编码）', async () => {
+    const srcFile = path.join(root, 'a.txt')
+    await fs.writeFile(srcFile, 'preencoded')
+    const r = await startReceiver()
+    const offerP = waitOffer(r)
+    const sender = new Sender({ senderId: 'me', senderName: 'Me' })
+    const entries: WalkEntry[] = [{ relPath: 'a.txt', absPath: srcFile, type: 'file', size: 10 }]
+    // 预编码帧携带与 Sender 自身参数不同的标识：只有真正复用该帧，接收端才会看到它。
+    // （若参数未被使用而回退到内部编码，senderName 会是 'Me' → 断言失败）
+    const preEncoded = encodeFrame({
+      type: 'OFFER',
+      transferId: 't-pre',
+      senderId: 'pre-id',
+      senderName: '预编码发送方',
+      fileCount: 1,
+      totalBytes: 10,
+      files: [{ type: 'file', path: 'a.txt', size: 10 }]
+    } satisfies OfferMessage)
+    const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-pre', entries, 10, preEncoded)
+    const offer = await offerP
+    expect(offer.senderId).toBe('pre-id')
+    expect(offer.senderName).toBe('预编码发送方')
+    r.respond(offer.transferId, 'accept')
+    await sendP
+    expect(await fs.readFile(path.join(recvDir, 'a.txt'), 'utf8')).toBe('preencoded')
+  })
+
   it('多文件 + 目录结构 + 空目录全部落盘', async () => {
     await fs.writeFile(path.join(root, 'top.txt'), 'top')
     await fs.mkdir(path.join(root, 'sub', 'empty'), { recursive: true })

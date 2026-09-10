@@ -7,6 +7,10 @@ import {
   MAGIC,
   HEADER_LENGTH,
   MAX_FRAME_LENGTH,
+  FrameTooLargeError,
+  offerTooLargeMessage,
+  encodeOfferFrame,
+  type OfferMessage,
   type AcceptMessage,
   type HelloMessage
 } from '../../src/main/network/protocol'
@@ -34,6 +38,77 @@ describe('encodeFrame / decodeFrame', () => {
   it('载荷超过上限抛出', () => {
     const big = { type: 'OFFER' as const, transferId: 'x', senderId: 's', senderName: 'n', fileCount: 1, totalBytes: 0, files: [{ type: 'file' as const, path: 'a'.repeat(1024 * 1024), size: 1 }] }
     expect(() => encodeFrame(big, 1024)).toThrow(/too large/)
+  })
+
+  it('超限错误结构化携带载荷字节数与上限（供调用方生成用户提示）', () => {
+    const big = { type: 'OFFER' as const, transferId: 'x', senderId: 's', senderName: 'n', fileCount: 1, totalBytes: 0, files: [{ type: 'file' as const, path: 'a'.repeat(2000), size: 1 }] }
+    let caught: unknown = null
+    try {
+      encodeFrame(big, 1024)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FrameTooLargeError)
+    const err = caught as FrameTooLargeError
+    expect(err.limitBytes).toBe(1024)
+    // payloadBytes 必须是 JSON 载荷的真实字节数，而非估算值
+    expect(err.payloadBytes).toBe(Buffer.byteLength(JSON.stringify(big), 'utf8'))
+    expect(err.payloadBytes).toBeGreaterThan(1024)
+  })
+
+  it('清单超限文案包含条目数、清单体积、上限与两条可执行建议', () => {
+    const text = offerTooLargeMessage(700_000, 80 * 1024 * 1024, MAX_FRAME_LENGTH)
+    expect(text).toContain('700000')
+    expect(text).toContain('80.0MB')
+    expect(text).toContain('64.0MB')
+    expect(text).toContain('压缩')
+    expect(text).toContain('分批')
+  })
+})
+
+describe('encodeOfferFrame（发送前清单预检）', () => {
+  const mkOffer = (n: number, segLen: number): OfferMessage => {
+    const files = Array.from({ length: n }, (_, i) => ({
+      type: 'file' as const,
+      path: `dir/${'a'.repeat(segLen)}${i}.txt`,
+      size: 1024
+    }))
+    return {
+      type: 'OFFER',
+      transferId: 'tid',
+      senderId: 'sid',
+      senderName: 'name',
+      fileCount: n,
+      totalBytes: n * 1024,
+      files
+    }
+  }
+
+  it('正常规模清单照常编码（往返可解码）', () => {
+    const offer = mkOffer(1000, 8)
+    expect(decodeFrame(encodeOfferFrame(offer))).toEqual(offer)
+  })
+
+  it('清单超限时抛出面向用户的错误，而非技术性错误', () => {
+    // 用显式上限直击超限分支：真实 64 MiB 边界需 67 万+ 条目（实测深目录约 100 B/条目），
+    // 构造这样一个清单的代价远超本用例要验证的逻辑（错误类型与文案）。
+    const offer = mkOffer(1000, 8)
+    let caught: unknown = null
+    try {
+      encodeOfferFrame(offer, 1024)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    const err = caught as Error
+    // 面向用户：给出条目数与两条可执行建议
+    expect(err.message).toContain('文件数量过多')
+    expect(err.message).toContain('1000 个条目')
+    expect(err.message).toContain('压缩')
+    expect(err.message).toContain('分批')
+    // 技术性细节不得直接冒到界面
+    expect(err).not.toBeInstanceOf(FrameTooLargeError)
+    expect(err.message).not.toContain('frame payload too large')
   })
 })
 

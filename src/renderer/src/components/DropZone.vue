@@ -33,6 +33,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useDeviceStore } from '../stores/device'
 import { useTransferStore } from '../stores/transfer'
+import { ipcErrorMessage } from '../utils/ipcError'
 import type { TransferTarget } from '../../../preload'
 import type { DeviceInfo } from '../../../main/network/deviceTable'
 
@@ -71,7 +72,8 @@ async function send(paths: string[]): Promise<void> {
     }
     ElMessage.success('已发起传输，等待对方确认')
   } catch (err) {
-    ElMessage.error((err as Error).message)
+    // 剥离 Electron invoke 的“Error invoking remote method '…'”包装，只显示业务消息
+    ElMessage.error(ipcErrorMessage(err))
   }
 }
 </script>

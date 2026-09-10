@@ -9,6 +9,7 @@ import { DiscoveryService } from './network/discovery'
 import { Receiver } from './network/receiver'
 import { Sender } from './network/sender'
 import { walkPaths } from './network/tree'
+import { encodeOfferFrame } from './network/protocol'
 import type { OfferSummary } from './network/receiver'
 import type { TransferTarget } from '../preload'
 
@@ -216,7 +217,21 @@ function registerIpc(): void {
     if (entries.length === 0) throw new Error('没有可发送的内容（空选择或仅符号链接）')
     const name = entries.length === 1 ? entries[0].relPath : `${entries.length} 项`
     const transferId = randomUUID()
-    const sender = new Sender({ senderId: getConfig().deviceId, senderName: getConfig().deviceName })
+    const cfg = getConfig()
+    // 清单预检：OFFER 是单个控制帧，条目过多会超出帧上限。在 IPC 返回前编码并校验，
+    // 超限即直接以可操作提示回渲染进程；否则 sender 要等连接建立后才抛技术错误，
+    // 而 UI 此时已提示“已发起传输”，用户会先看到成功、再看到失败。
+    // 校验通过的帧传给 sender 复用，避免对同一份清单重复序列化。
+    const offerFrame = encodeOfferFrame({
+      type: 'OFFER',
+      transferId,
+      senderId: cfg.deviceId,
+      senderName: cfg.deviceName,
+      fileCount: entries.length,
+      totalBytes,
+      files: entries.map((e) => ({ type: e.type, path: e.relPath, size: e.size }))
+    })
+    const sender = new Sender({ senderId: cfg.deviceId, senderName: cfg.deviceName })
     senders.set(transferId, sender)
     sender.on('progress', (p) => win?.webContents.send('transfer:update', { kind: 'progress', ...p }))
     // 分阶段确认：文件已送达对端（未落盘）——UI 可显示“已送达 N/M”，与最终“已完成”区分
@@ -229,7 +244,7 @@ function registerIpc(): void {
       win?.webContents.send('transfer:update', { kind: 'failed', ...f })
       senders.delete(transferId)
     })
-    void sender.start({ host, port }, transferId, entries, totalBytes).catch(() => {
+    void sender.start({ host, port }, transferId, entries, totalBytes, offerFrame).catch(() => {
       // 失败已通过 'failed' 事件上报 UI
     })
     return { transferId, name, totalBytes, fileCount: entries.length, skippedSymlinks }

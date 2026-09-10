@@ -131,7 +131,10 @@ export class Sender extends EventEmitter {
     target: { host: string; port: number },
     transferId: string,
     entries: WalkEntry[],
-    totalBytes: number
+    totalBytes: number,
+    // 已编码的 OFFER 帧：调用方已完成清单大小预检并复用其编码结果，避免对同一份清单
+    // 重复序列化。省略时按 entries 现编码（保持 Sender 可独立使用）。
+    offerFrame?: Buffer
   ): Promise<void> {
     this.transferId = transferId
     const socket = net.createConnection(target)
@@ -164,15 +167,16 @@ export class Sender extends EventEmitter {
       await onceConnect(socket)
 
       socket.write(
-        encodeFrame({
-          type: 'OFFER',
-          transferId,
-          senderId: this.opts.senderId,
-          senderName: this.opts.senderName,
-          fileCount: entries.length,
-          totalBytes,
-          files: entries.map((e) => ({ type: e.type, path: e.relPath, size: e.size }))
-        })
+        offerFrame ??
+          encodeFrame({
+            type: 'OFFER',
+            transferId,
+            senderId: this.opts.senderId,
+            senderName: this.opts.senderName,
+            fileCount: entries.length,
+            totalBytes,
+            files: entries.map((e) => ({ type: e.type, path: e.relPath, size: e.size }))
+          })
       )
 
       const result = (await waitFor(this, 'offer-result', OFFER_TIMEOUT_MS, 'offer timeout: 对方无响应')) as {

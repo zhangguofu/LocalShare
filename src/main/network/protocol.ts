@@ -1,7 +1,7 @@
 // 帧格式：4B magic "LS1\0" + 4B uint32 BE length + JSON payload（UTF-8）
 export const MAGIC = Buffer.from([0x4c, 0x53, 0x31, 0x00]) // "LS1\0"
 export const HEADER_LENGTH = 8
-export const MAX_FRAME_LENGTH = 16 * 1024 * 1024
+export const MAX_FRAME_LENGTH = 64 * 1024 * 1024
 export const MAX_DISCOVERY_LENGTH = 1024
 
 // ---- 消息类型（协议 5.3 + 发现消息 4.3） ----
@@ -113,10 +113,46 @@ export type Message =
   | ErrorMessage
 
 // ---- 帧编解码 ----
+// 载荷超限。结构化携带实际/上限字节数，使调用方能区分“用户可修复的清单过大”与
+// 其他编码故障并生成可操作提示（message 保持技术原样，供日志定位）。
+export class FrameTooLargeError extends Error {
+  constructor(
+    readonly payloadBytes: number,
+    readonly limitBytes: number
+  ) {
+    super(`frame payload too large: ${payloadBytes} > ${limitBytes}`)
+    this.name = 'FrameTooLargeError'
+  }
+}
+
+// 清单超限的用户可见文案。与技术性 message 分离：message 供日志定位，
+// 此文案面向用户，给出条目数/清单体积/上限与两条可执行操作。
+export function offerTooLargeMessage(fileCount: number, payloadBytes: number, limitBytes: number): string {
+  const mb = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)}MB`
+  return (
+    `文件数量过多：本次选择 ${fileCount} 个条目，发送清单 ${mb(payloadBytes)} 超出单次上限 ${mb(limitBytes)}。` +
+    '请将文件夹压缩为压缩包后再发送，或分批选择子目录。'
+  )
+}
+
+// 编码 OFFER 清单帧（发送前预检）。超限时抛出面向用户的错误，而不是让技术性的
+// FrameTooLargeError 冒到界面：OFFER 是单个控制帧，清单大小由条目数决定，属于
+// 用户可采取措施的场景（压缩或分批）。返回已编码帧，调用方应直接复用以免重复序列化。
+export function encodeOfferFrame(offer: OfferMessage, maxLen: number = MAX_FRAME_LENGTH): Buffer {
+  try {
+    return encodeFrame(offer, maxLen)
+  } catch (err) {
+    if (err instanceof FrameTooLargeError) {
+      throw new Error(offerTooLargeMessage(offer.fileCount, err.payloadBytes, err.limitBytes))
+    }
+    throw err
+  }
+}
+
 export function encodeFrame(msg: Message, maxLen: number = MAX_FRAME_LENGTH): Buffer {
   const payload = Buffer.from(JSON.stringify(msg), 'utf8')
   if (payload.length > maxLen) {
-    throw new Error(`frame payload too large: ${payload.length} > ${maxLen}`)
+    throw new FrameTooLargeError(payload.length, maxLen)
   }
   const header = Buffer.alloc(HEADER_LENGTH)
   MAGIC.copy(header, 0)
