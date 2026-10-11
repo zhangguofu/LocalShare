@@ -68,6 +68,12 @@ git add package.json && git commit -m "release: v1.2.3"
 git tag v1.2.3 && git push origin main --tags   # 触发 CI 发布
 ```
 
+**macOS 平台要求（Apple [TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)）**——构建时已自动处理，发版后建议抽查产物：
+
+- **`NSLocalNetworkUsageDescription` 必须声明**（见 `electron-builder.yml` 的 `mac.extendInfo`）。缺失时系统无法展示授权提示，局域网连接会被**静默拒绝**（表现为 `connect EHOSTUNREACH`，对端界面毫无提示）。
+- **主可执行文件必须带唯一 UUID**（`scripts/after-pack.cjs` 打包后写入）。Electron 默认沿用框架模板 UUID，会与所有同版本 Electron 应用冲突，导致本地网络权限判到别的程序上；该钩子找不到 `LC_UUID` 会**让构建失败**（有意设计，避免静默发出不合规的包）。
+- 未签名分发时，**升级后用户可能需要在「系统设置 → 隐私与安全性 → 本地网络」重新授权**（该授权按程序身份记录，而身份随构建变化）；签名（Developer ID）才能跨版本继承。
+
 **代码签名**（可选，正式分发建议）：将 macOS（`.p12`）与 Windows 证书 Base64 存入 GitHub Secrets：`MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` / `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`。未配置时 CI 自动跳过签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`）。CI 使用 `npm ci`（依赖锁定 `package-lock.json`）。
 
 ## 文档索引
