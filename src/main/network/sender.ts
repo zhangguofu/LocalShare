@@ -18,6 +18,12 @@ const ACK_TIMEOUT_BASE_MS = 30_000 // TRANSFER_DONE 后等 ACK：基础 30 秒
 const ACK_DRAIN_RATE_BYTES = 20 * 1024 * 1024 // 接收方队列排空估算速率（保守值）：动态超时 = 基础 + 发送量/速率
 const NO_DATA_TIMEOUT_MS = 30_000 // 传输中无数据流动（写方向无进展）：30 秒
 
+// 连接重试间隔（Apple TN3179《Understanding local network privacy》要求）：
+// 首次本地网络操作可能在用户回答授权提示**之前**就被系统直接拒绝（macOS 上表现为
+// EHOSTUNREACH / "No route to host"），官方要求为这种情况加入适当的重试逻辑——
+// 否则用户即便点了「允许」，本次传输也已经失败。首次立即尝试，之后按下面间隔重试。
+const CONNECT_RETRY_DELAYS_MS = [1500, 3000, 5000] // 共 4 次尝试，约 9.5 秒预算
+
 // 发送侧预读水位（衔接）：「提前准备下一块」，让读盘与发送在时间上重叠。
 // 依据（docs/large-file-throughput-analysis-2026-10-11.md §5 P2）：
 //   恢复读盘时的剩余积压 ≥ 最坏读盘延迟 × 链路速率
@@ -38,6 +44,33 @@ function onceConnect(socket: net.Socket): Promise<void> {
     socket.once('connect', () => resolve())
     socket.once('error', reject)
   })
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// 本机侧「不可达」错误：macOS 本地网络权限未授予时，连接会被系统直接拒绝并返回
+// EHOSTUNREACH（ENETUNREACH/EHOSTDOWN 同属这一类）。这类错误值得重试——授权提示
+// 可能正在屏幕上等用户点击；而 ECONNREFUSED（对方未在监听）重试无意义。
+export function isLocalNetworkBlocked(err: NodeJS.ErrnoException | null | undefined): boolean {
+  return err?.code === 'EHOSTUNREACH' || err?.code === 'ENETUNREACH' || err?.code === 'EHOSTDOWN'
+}
+
+// 把底层 errno 翻译成用户能照做的中文提示（不应把一行英文错误码直接丢给用户）
+export function describeConnectError(err: NodeJS.ErrnoException, host: string, port: number): string {
+  if (isLocalNetworkBlocked(err)) {
+    return (
+      `无法连接 ${host}:${port}（${err.code}）：通常是 macOS 未允许本应用访问本地网络。` +
+      '请在「系统设置 → 隐私与安全性 → 本地网络」中允许 LocalShare；' +
+      '若已允许仍失败，请退出应用后把它移动到其他位置再打开（该授权与程序身份绑定）。'
+    )
+  }
+  if (err.code === 'ECONNREFUSED') {
+    return `无法连接 ${host}:${port}：对方未在运行，或端口与对方设置不一致。`
+  }
+  if (err.code === 'ETIMEDOUT') {
+    return `连接 ${host}:${port} 超时：请确认两台设备在同一局域网，且未被防火墙拦截。`
+  }
+  return err.message
 }
 
 function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg: string): Promise<unknown> {
@@ -132,7 +165,14 @@ export class Sender extends EventEmitter {
   private peerBytes = 0
   private transferStartedAt = 0
 
-  constructor(private readonly opts: { senderId: string; senderName: string }) {
+  constructor(
+    private readonly opts: {
+      senderId: string
+      senderName: string
+      // 测试用：覆盖连接重试间隔，避免用例真的等 9.5 秒（与 Receiver.sinkWriteDelayMs 同一约定）
+      connectRetryDelaysMs?: number[]
+    }
+  ) {
     super()
   }
 
@@ -149,34 +189,33 @@ export class Sender extends EventEmitter {
     offerFrame?: Buffer
   ): Promise<void> {
     this.transferId = transferId
-    const socket = net.createConnection(target)
-    this.socket = socket
     let progressTimer: NodeJS.Timeout | null = null // 作用域提升：finally 里统一清理（成功/失败/取消）
-    socket.setNoDelay(true)
-    socket.on('data', (chunk: Buffer | string) => {
-      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
-      try {
-        for (const msg of this.parser.push(buf)) this.onMessage(msg)
-      } catch (err) {
-        this.fail(err as Error)
-      }
-    })
-    socket.on('error', (err) => this.fail(err))
-    socket.on('close', () => {
-      if (this.transferId) this.fail(new Error('connection closed'))
-    })
-    // 无数据超时（应用层实现，替代 socket.setTimeout：后者对“收到数据”不重置计时器，
-    // 接收方水位背压静默期间靠 KEEPALIVE 帧保活，实测 socket.setTimeout 仍会误杀）
-    this.lastAliveAt = Date.now()
-    this.aliveTimer = setInterval(() => {
-      if (!this.transferId) return
-      if (Date.now() - this.lastAliveAt > NO_DATA_TIMEOUT_MS) {
-        this.fail(new Error(`传输超时：${Math.round(NO_DATA_TIMEOUT_MS / 1000)} 秒无数据流动`))
-      }
-    }, Math.min(5000, NO_DATA_TIMEOUT_MS / 4))
 
     try {
-      await onceConnect(socket)
+      // 连接（含官方要求的重试）：见 connectWithRetry 注释
+      const socket = await this.connectWithRetry(target)
+      socket.setNoDelay(true)
+      socket.on('data', (chunk: Buffer | string) => {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+        try {
+          for (const msg of this.parser.push(buf)) this.onMessage(msg)
+        } catch (err) {
+          this.fail(err as Error)
+        }
+      })
+      socket.on('error', (err) => this.fail(err))
+      socket.on('close', () => {
+        if (this.transferId) this.fail(new Error('connection closed'))
+      })
+      // 无数据超时（应用层实现，替代 socket.setTimeout：后者对“收到数据”不重置计时器，
+      // 接收方水位背压静默期间靠 KEEPALIVE 帧保活，实测 socket.setTimeout 仍会误杀）
+      this.lastAliveAt = Date.now()
+      this.aliveTimer = setInterval(() => {
+        if (!this.transferId) return
+        if (Date.now() - this.lastAliveAt > NO_DATA_TIMEOUT_MS) {
+          this.fail(new Error(`传输超时：${Math.round(NO_DATA_TIMEOUT_MS / 1000)} 秒无数据流动`))
+        }
+      }, Math.min(5000, NO_DATA_TIMEOUT_MS / 4))
 
       socket.write(
         offerFrame ??
@@ -281,7 +320,8 @@ export class Sender extends EventEmitter {
   // 取消：停数据流 → 尽力发 CANCEL（对端若在 CTRL 模式可识别为取消；被数据吞掉由 FIN 兜底）→ FIN → 短延迟强制关闭
   // 对端语义：收到 FIN（end 事件）视为对方已取消，RST/超时视为连接断开
   cancel(reason = 'user_cancelled'): void {
-    if (!this.socket || !this.transferId) return
+    // 只要求 transferId：连接/重试阶段 this.socket 可能暂时为 null，用户取消仍必须生效
+    if (!this.transferId) return
     const id = this.transferId
     this.transferId = null
     if (this.currentStream) {
@@ -290,17 +330,48 @@ export class Sender extends EventEmitter {
     }
     const sock = this.socket
     this.socket = null
-    try {
-      sock.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
-    } catch {
-      // 对端可能已断开，忽略
+    if (sock) {
+      try {
+        sock.write(encodeFrame({ type: 'CANCEL', transferId: id, reason }))
+      } catch {
+        // 对端可能已断开，忽略
+      }
     }
     this.emit('failed', { transferId: id, reason: 'cancelled' })
+    if (!sock) return // 尚未连上：没有需要收尾的连接
     sock.end() // FIN：TCP 层可靠送达
     // CANCEL 已 flush（毫秒级）后强制关闭连接，避免半开连接挂住对端/本端资源
     setTimeout(() => {
       if (!sock.destroyed) sock.destroy()
     }, 100)
+  }
+
+  // 建立连接，含 Apple 官方要求（TN3179）的重试：首次本地网络操作可能在用户回答授权
+  // 提示之前就被系统直接拒绝（EHOSTUNREACH 等），此时重试能让用户点了「允许」之后本次
+  // 传输照常进行，而不是当场失败。只对「本机侧不可达」类错误重试（对方未监听等无意义）。
+  private async connectWithRetry(target: { host: string; port: number }): Promise<net.Socket> {
+    const delays = this.opts.connectRetryDelaysMs ?? CONNECT_RETRY_DELAYS_MS
+    let lastErr: NodeJS.ErrnoException | null = null
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (attempt > 0) {
+        await sleep(delays[attempt - 1])
+        if (!this.transferId) throw new Error('cancelled') // 重试等待期间被取消
+      }
+      const socket = net.createConnection(target)
+      this.socket = socket // 让 cancel()/fail() 在连接阶段也能立即销毁本次尝试
+      try {
+        await onceConnect(socket)
+        return socket
+      } catch (err) {
+        lastErr = err as NodeJS.ErrnoException
+        socket.destroy()
+        this.socket = null
+        // 非「本机侧不可达」不重试；已取消也不再继续
+        if (!isLocalNetworkBlocked(lastErr) || !this.transferId) break
+      }
+    }
+    if (lastErr) throw new Error(describeConnectError(lastErr, target.host, target.port))
+    throw new Error('connect failed')
   }
 
   private onMessage(msg: Message): void {
