@@ -18,7 +18,17 @@
         </el-radio-group>
       </el-form-item>
       <el-form-item label="UDP 端口">
-        <el-input-number v-model="form.udpPort" :min="1" :max="65535" controls-position="right" />
+        <div class="udp-col">
+          <el-input-number v-model="form.udpPort" :min="1" :max="65535" controls-position="right" />
+          <!-- FR-27：UDP 端口是全网共用的发现约定，只在用户动手修改时提示（存完即沉默） -->
+          <el-alert
+            v-if="udpPortChanged"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="局域网内所有设备共用的发现端口，需保持一致"
+          />
+        </div>
       </el-form-item>
       <el-form-item label="TCP 端口">
         <el-input-number v-model="form.tcpPort" :min="1" :max="65535" controls-position="right" />
@@ -41,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { AppConfig } from '../../../main/config'
 import { useTheme, type ThemeMode } from '../composables/theme'
@@ -63,6 +73,11 @@ const form = reactive<AppConfig>({
 })
 const saving = ref(false)
 const version = ref('')
+const originalUdpPort = ref(0)
+// 与打开设置页时加载到的值比较：只在用户真的动手改时提示，保存后重新打开不再提示
+const udpPortChanged = computed(
+  () => originalUdpPort.value !== 0 && form.udpPort !== originalUdpPort.value
+)
 
 onMounted(async () => {
   version.value = await window.api.getVersion()
@@ -75,6 +90,7 @@ watch(visible, async (open) => {
   form.deviceId = cfg.deviceId
   form.deviceName = cfg.deviceName
   form.udpPort = cfg.udpPort
+  originalUdpPort.value = cfg.udpPort
   form.tcpPort = cfg.tcpPort
   form.saveDir = cfg.saveDir
 })
@@ -113,6 +129,7 @@ async function save(): Promise<void> {
 
 <style scoped>
 .dir-row { display: flex; gap: 8px; width: 100%; }
+.udp-col { display: flex; flex-direction: column; gap: 8px; }
 .dir-row .el-input { flex: 1; }
 .footer-row { display: flex; align-items: center; width: 100%; }
 .spacer { flex: 1; }
