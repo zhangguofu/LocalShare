@@ -5,7 +5,7 @@
 ## 技术栈
 
 - Electron + Vue 3 + TypeScript + Vite + Pinia + Element Plus
-- **网络层从零自研**（仅 Node 内置 `dgram`/`net`）：UDP 发现协议 + TCP 传输协议（帧格式/状态机详见[设计文档](2026-08-27-localshare-design.md)）
+- **网络层从零自研**（仅 Node 内置 `dgram`/`net`）：UDP 发现协议 + TCP 传输协议（帧格式/状态机详见[设计文档](localshare-design-2026-08-27.md)）
 - 国内镜像固化（`.npmrc` → npmmirror），依赖安装开箱即用
 
 ## 目录结构
@@ -72,6 +72,6 @@ git tag v1.2.3 && git push origin main --tags   # 触发 CI 发布
 
 ## 文档索引
 
-- [需求分析文档（PRD）](2026-08-28-localshare-prd.md)——需求分析、功能需求清单（MoSCoW + 状态）、功能拆解、后续工作
-- [设计文档](2026-08-27-localshare-design.md)——需求基线、架构、协议规格（帧格式/消息/状态机）、测试策略
+- [需求分析文档（PRD）](localshare-prd-2026-08-28.md)——需求分析、功能需求清单（MoSCoW + 状态）、功能拆解、后续工作
+- [设计文档](localshare-design-2026-08-27.md)——需求基线、架构、协议规格（帧格式/消息/状态机）、测试策略
 - [Windows 环境搭建与打包](BUILD-WINDOWS.md) / [macOS 环境搭建与打包](BUILD-MACOS.md)
