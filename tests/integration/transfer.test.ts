@@ -135,7 +135,7 @@ describe('端到端传输（回环 TCP）', () => {
     const sendP = sender.start({ host: '127.0.0.1', port: TCP_PORT }, 't-4', [{ relPath: 'x.txt', absPath: srcFile, type: 'file', size: 4 }], 4)
     const offer = await offerP
     r.respond(offer.transferId, 'reject')
-    await expect(sendP).rejects.toThrow(/declined/)
+    await expect(sendP).rejects.toThrow(/对方已拒绝/)
     await expect(fs.access(path.join(recvDir, 'x.txt'))).rejects.toThrow()
   })
 
@@ -189,7 +189,7 @@ describe('端到端传输（回环 TCP）', () => {
 
     // 收尾：拒绝，避免悬挂等待
     r.respond(offer.transferId, 'reject')
-    await expect(sendP).rejects.toThrow(/declined/)
+    await expect(sendP).rejects.toThrow(/对方已拒绝/)
   })
 
   it('接受后无数据到达：按无数据超时失败并清理 .part', async () => {

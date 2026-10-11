@@ -73,6 +73,13 @@ export function describeConnectError(err: NodeJS.ErrnoException, host: string, p
   return err.message
 }
 
+// 接收方的拒绝原因在协议里是简短代码（如 user_declined）。界面不该显示内部代码，
+// 这里翻译成人话；未知原因原样透出，便于将来新增代码时仍能看到线索。
+export function describeRejectReason(reason?: string): string {
+  if (!reason || reason === 'user_declined') return '对方已拒绝'
+  return reason
+}
+
 function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(timeoutMsg)), timeoutMs)
@@ -234,7 +241,7 @@ export class Sender extends EventEmitter {
         ok: boolean
         reason?: string
       }
-      if (!result.ok) throw new Error(result.reason ?? 'rejected')
+      if (!result.ok) throw new Error(describeRejectReason(result.reason))
 
       this.lastAliveAt = Date.now() // 进入传输阶段重置（OFFER 等待期间可能久候）
       this.transferStartedAt = Date.now()
