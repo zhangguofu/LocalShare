@@ -11,9 +11,19 @@ mac:
   target:
     - dmg
   category: public.app-category.utilities
+  # Apple 要求（TN3179《Understanding local network privacy》）：访问本地网络的应用
+  # 必须在 Info.plist 中声明用途说明。缺少该键时系统无法向用户展示授权提示，
+  # 局域网连接会被静默拒绝（macOS 上表现为 connect EHOSTUNREACH / "No route to host"）。
+  # 本应用两类操作都属于"本地网络操作"：UDP 广播发现 + 出站 TCP 传输。
+  extendInfo:
+    NSLocalNetworkUsageDescription: LocalShare 需要访问本地网络，用于发现同一局域网内的设备并传输文件。
 win:
   target:
     - nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+# 打包后处理：给主可执行文件写入本应用专属的 LC_UUID。
+# Apple 要求（同上 TN3179）：主可执行文件必须有 UUID 且必须唯一，否则本地网络权限
+# 可能行为异常（Electron 打包默认沿用框架模板 UUID，导致所有同类应用互相冲突）。
+afterPack: scripts/after-pack.cjs
