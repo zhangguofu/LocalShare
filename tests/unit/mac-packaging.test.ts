@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -16,6 +25,7 @@ const repoRoot = path.resolve(here, '../..')
 
 const afterPack = require(path.join(repoRoot, 'scripts/after-pack.cjs')) as {
   patchMachOUuid: (file: string, uuid: string) => { changed: boolean; from: string; to: string }
+  adHocSign: (appPath: string, log?: (m: string) => void) => void
   APP_UUID: string
 }
 
@@ -30,6 +40,36 @@ describe('macOS 打包合规（Apple TN3179）', () => {
   it('配置了打包后 UUID 处理钩子', () => {
     const yml = readFileSync(path.join(repoRoot, 'electron-builder.yml'), 'utf8')
     expect(yml).toMatch(/afterPack:\s*scripts\/after-pack\.cjs/)
+  })
+
+  it('打包钩子里先改写 UUID 再 ad-hoc 签名（签名须覆盖改写后的二进制）', () => {
+    const src = readFileSync(path.join(repoRoot, 'scripts/after-pack.cjs'), 'utf8')
+    const iUuid = src.indexOf('patchMachOUuid(exePath, APP_UUID)')
+    const iSign = src.indexOf('adHocSign(appPath, (m)') // 调用处（函数定义在更前面，不能匹配定义）
+    expect(iUuid).toBeGreaterThan(-1)
+    expect(iSign).toBeGreaterThan(iUuid)
+  })
+
+  // ad-hoc 签名（免证书）提供本地网络权限所依赖的「签名标识」：
+  // 未签名时系统日志报 Failed to get the signing identifier，授权无法记录 → 静默拒绝。
+  it.skipIf(process.platform !== 'darwin')('ad-hoc 签名产出签名标识与校验通过', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'ls-fakeapp-'))
+    const app = path.join(dir, 'Fake.app')
+    mkdirSync(path.join(app, 'Contents/MacOS'), { recursive: true })
+    copyFileSync('/usr/bin/true', path.join(app, 'Contents/MacOS', 'Fake'))
+    writeFileSync(
+      path.join(app, 'Contents/Info.plist'),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' +
+        '<key>CFBundleIdentifier</key><string>com.localshare.testfake</string>' +
+        '<key>CFBundleExecutable</key><string>Fake</string></dict></plist>'
+    )
+    afterPack.adHocSign(app)
+    const r = spawnSync('codesign', ['-dv', app], { encoding: 'utf8' })
+    const out = `${r.stdout}${r.stderr}`
+    expect(out).toContain('Identifier=com.localshare.testfake')
+    expect(out).toContain('Signature=adhoc')
+    expect(spawnSync('codesign', ['--verify', app], { encoding: 'utf8' }).status).toBe(0)
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('非 Mach-O 文件必须报错（不能让构建静默放过）', () => {
