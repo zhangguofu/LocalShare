@@ -18,6 +18,15 @@ const ACK_TIMEOUT_BASE_MS = 30_000 // TRANSFER_DONE 后等 ACK：基础 30 秒
 const ACK_DRAIN_RATE_BYTES = 20 * 1024 * 1024 // 接收方队列排空估算速率（保守值）：动态超时 = 基础 + 发送量/速率
 const NO_DATA_TIMEOUT_MS = 30_000 // 传输中无数据流动（写方向无进展）：30 秒
 
+// 发送侧预读水位（衔接）：「提前准备下一块」，让读盘与发送在时间上重叠。
+// 依据（docs/large-file-throughput-analysis-2026-10-11.md §5 P2）：
+//   恢复读盘时的剩余积压 ≥ 最坏读盘延迟 × 链路速率
+// 判定发生在「某一块刚交给内核」之后，粒度为一整块，故低水位再让出一个块。
+// 默认值覆盖：链路 ≤ 100 MB/s（千兆实际水平）× 单次读盘停顿 ≤ 30 ms（机械盘/网络盘）；
+// 上限只约束本机内存（每连接 ~8 MB），不影响对端。
+const READ_AHEAD_LOW_BYTES = 4 * 1024 * 1024
+const READ_AHEAD_HIGH_BYTES = 8 * 1024 * 1024
+
 // 动态 ACK 超时：接收方收包与落盘解耦后，“发完 ≠ 写完”——队列排空需要时间。
 // 只放宽不收紧，避免大文件 + 慢盘被固定 30 秒误杀（设计文档 §5）
 function ackTimeoutMs(totalBytes: number): number {
@@ -48,8 +57,9 @@ function waitFor(em: EventEmitter, event: string, timeoutMs: number, timeoutMsg:
 // P1：返回实际发送字节数（文件传输中被截断时与清单 size 不符，供调用方校验）；
 // P2：监听器用完即清，不随文件累积（曾因 socket.on('drain') 每文件挂一组且从不摘除，
 // 多文件传输时 MaxListenersExceededWarning + 无效回调累积）；
-// onAlive：写缓冲推进（write 返回 true 或 drain）时上报——发送方存活检测信号之一
-function pipeFile(
+// onAlive：写缓冲推进（数据块交给内核，即对端在消费）时上报——发送方存活检测信号之一
+// 导出仅为单元测试直接验证发送侧预读衔接行为（tests/unit/sender-readahead.test.ts）
+export function pipeFile(
   socket: net.Socket,
   stream: ReadStream,
   onBytes: (n: number) => void,
@@ -70,16 +80,20 @@ function pipeFile(
       cleanup()
       reject(err)
     }
-    const onDrain = (): void => {
-      stream.resume()
-      onAlive?.()
-    }
     const onData = (chunk: Buffer | string): void => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
       written += buf.length
       onBytes(buf.length)
-      if (!socket.write(buf)) stream.pause()
-      else onAlive?.() // 写入完全进入内核缓冲：对端在持续接收，存活信号
+      // 写入回调 = 该块已交给内核的时点。积压一旦回落到低水位就立刻继续读盘，
+      // 而不是等 drain（积压归零）——等归零意味着内核里已无数据可发，
+      // 链路必然空转一个「重新读盘」的来回（旧实现在 26.6 s 抓包里留下 4.72 s 这类空洞）。
+      socket.write(buf, () => {
+        if (settled || stream.destroyed) return
+        if (socket.writableLength < READ_AHEAD_LOW_BYTES) stream.resume()
+        onAlive?.() // 数据已交给内核且被持续消费：存活信号（对端停读则回调停止）
+      })
+      // 预读上限：超出即暂停读流，保证内存有界（对端慢时最多积压到这里）
+      if (socket.writableLength >= READ_AHEAD_HIGH_BYTES) stream.pause()
     }
     const onEnd = (): void => {
       if (settled) return
@@ -91,7 +105,6 @@ function pipeFile(
     const cleanup = (): void => {
       stream.off('error', onStreamErr)
       socket.off('error', onSocketErr)
-      socket.off('drain', onDrain)
       stream.off('data', onData)
       stream.off('end', onEnd)
       // settle 后 Sender.fail/cancel 仍可能 stream.destroy(err)（唤醒机制依赖 error 事件）；
@@ -100,7 +113,6 @@ function pipeFile(
     }
     stream.on('error', onStreamErr)
     socket.on('error', onSocketErr)
-    socket.on('drain', onDrain)
     stream.on('data', onData)
     stream.on('end', onEnd)
   })
